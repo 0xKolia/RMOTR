@@ -1,0 +1,142 @@
+/*
+ * Copyright (c) 2026 Carl Henriksson
+ * SPDX-License-Identifier: MIT
+ */
+
+/dts-v1/;
+#include <nordic/nrf52840_qiaa.dtsi>
+#include <common/nordic/nrf52840_uf2_boot_mode.dtsi>
+#include <dt-bindings/led/led.h>
+#include <input/processors.dtsi>
+#include "rotr-pinctrl.dtsi"
+
+/ {
+	model = "ROTR";
+	compatible = "polarityworks,rotr";
+
+	chosen {
+		zephyr,code-partition = &code_partition;
+		zephyr,sram = &sram0;
+		zephyr,flash = &flash0;
+		zephyr,console = &cdc_acm_uart;
+		zmk,kscan = &kscan0;
+		zmk,underglow = &led_strip;
+		zmk,battery = &vbatt;
+	};
+
+	kscan0: kscan {
+		compatible = "zmk,kscan-gpio-matrix";
+		diode-direction = "col2row";
+		debounce-press-ms = <5>;
+		debounce-release-ms = <5>;
+
+		row-gpios = <&gpio1 13 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+		/* col 0 = right, col 1 = middle, col 2 = left. */
+		col-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>,
+		            <&gpio0 3 GPIO_ACTIVE_HIGH>,
+		            <&gpio1 15 GPIO_ACTIVE_HIGH>;
+	};
+
+	ext-power {
+		compatible = "zmk,ext-power-generic";
+		control-gpios = <&gpio1 11 GPIO_ACTIVE_HIGH>;
+	};
+
+	vbatt: vbatt {
+		compatible = "zmk,battery-voltage-divider";
+		io-channels = <&adc 2>;
+		/* 100 kOhm / 100 kOhm divider. */
+		output-ohms = <100000>;
+		full-ohms = <(100000 + 100000)>;
+	};
+
+	ma730_listener: ma730-listener {
+		compatible = "zmk,input-listener";
+		device = <&ma730>;
+		input-processors = <&zip_scroll_scaler 1 20>;
+	};
+};
+
+&adc { status = "okay"; };
+&gpiote { status = "okay"; };
+&gpio0 { status = "okay"; };
+&gpio1 { status = "okay"; };
+
+zephyr_udc0: &usbd {
+	status = "okay";
+	cdc_acm_uart: cdc_acm_uart {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+&spi1 {
+	status = "okay";
+	compatible = "nordic,nrf-spim";
+	pinctrl-0 = <&spi1_default>;
+	pinctrl-1 = <&spi1_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
+
+	ma730: ma730@0 {
+		compatible = "polarityworks,ma730-input";
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(8)>;
+		scroll-divisor = <1>;
+		reversal-threshold = <10>;
+	};
+};
+
+&spi2 {
+	status = "okay";
+	compatible = "nordic,nrf-spim";
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	led_strip: ws2812@0 {
+		compatible = "worldsemi,ws2812-spi";
+		reg = <0>;
+		/*
+		 * WS2812 timing at 4 MHz SPI clock:
+		 *   one-frame  0x70 = 0b01110000 (~0.75 us high)
+		 *   zero-frame 0x40 = 0b01000000 (~0.25 us high)
+		 * Recalculate both values if the SPI clock frequency changes.
+		 */
+		spi-max-frequency = <4000000>;
+		spi-one-frame = <0x70>;
+		spi-zero-frame = <0x40>;
+		chain-length = <3>;
+		color-mapping = <LED_COLOR_ID_GREEN
+		                 LED_COLOR_ID_RED
+		                 LED_COLOR_ID_BLUE>;
+	};
+};
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/*
+		 * Partition layout is fixed by the Adafruit nRF52 UF2
+		 * bootloader. Do not modify these regions.
+		 */
+		sd_partition: partition@0 {
+			reg = <0x00000000 0x00026000>;
+		};
+		code_partition: partition@26000 {
+			reg = <0x00026000 0x000c6000>;
+		};
+		storage_partition: partition@ec000 {
+			reg = <0x000ec000 0x00008000>;
+		};
+		boot_partition: partition@f4000 {
+			reg = <0x000f4000 0x0000c000>;
+		};
+	};
+};
+
+&reg1 {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};

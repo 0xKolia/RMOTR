@@ -1,0 +1,18 @@
+# Copyright (c) 2026 Carl Henriksson
+# SPDX-License-Identifier: MIT
+
+config ZMK_KEYBOARD_NAME
+	default "ROTR" if BOARD_ROTR
+
+if BOARD_ROTR
+if USB
+config USB_NRFX
+	default y
+
+config USB_DEVICE_STACK
+	default y
+endif
+
+config BT_CTLR
+	default BT
+endif

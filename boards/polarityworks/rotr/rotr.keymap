@@ -1,0 +1,24 @@
+/*
+ * Copyright (c) 2026 Carl Henriksson
+ * SPDX-License-Identifier: MIT
+ *
+ * Button order matches col-gpios in the DTS:
+ * col 0 = right, col 1 = middle, col 2 = left.
+ */
+
+#include <behaviors.dtsi>
+#include <dt-bindings/zmk/mouse.h>
+
+/ {
+	keymap {
+		compatible = "zmk,keymap";
+
+		default_layer {
+			bindings = <
+				&mkp RCLK
+				&mkp MCLK
+				&mkp LCLK
+			>;
+		};
+	};
+};

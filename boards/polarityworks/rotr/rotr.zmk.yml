@@ -1,0 +1,10 @@
+file_format: "1"
+id: rotr
+name: ROTR
+manufacturer: PolarityWorks
+features:
+  - keys
+  - bluetooth
+  - usb
+  - pointing
+  - rgb_underglow

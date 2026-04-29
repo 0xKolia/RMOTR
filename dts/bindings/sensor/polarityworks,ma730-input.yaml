@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Carl Henriksson
+# SPDX-License-Identifier: MIT
+
+description: |
+  MagAlpha MA730 absolute magnetic rotary encoder.
+
+  Polls angle over SPI and emits INPUT_REL_WHEEL events.
+
+  Requires SPI mode 3. spi-max-frequency must not exceed the MA730 limit.
+
+compatible: "polarityworks,ma730-input"
+
+include: spi-device.yaml
+
+properties:
+  scroll-divisor:
+    type: int
+    default: 1
+    description: |
+      Degrees of rotation per scroll tick. Must be >= 1. Leave at 1
+      and tune sensitivity with zmk,input-processor-scaler instead.
+
+  reversal-threshold:
+    type: int
+    default: 10
+    description: |
+      Minimum raw-count delta to confirm a direction change.
+
+  invert-scroll:
+    type: boolean
+    description: |
+      Invert scroll direction. By default, clockwise rotation produces
+      positive wheel events.

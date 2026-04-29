@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Carl Henriksson
+# SPDX-License-Identifier: MIT
+
+name: rotr-firmware
+build:
+  cmake: .
+  kconfig: Kconfig
+  settings:
+    # Repository root contains the board and DTS bindings.
+    board_root: .
+    dts_root: .

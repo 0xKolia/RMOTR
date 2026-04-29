@@ -1,0 +1,57 @@
+# Copyright (c) 2026 Carl Henriksson
+# SPDX-License-Identifier: MIT
+
+config MA730_INPUT
+	bool "MA730 magnetic encoder input driver"
+	depends on SPI && INPUT
+	help
+	  Driver for the MagAlpha MA730 absolute magnetic rotary encoder.
+	  Emits relative wheel events via the Zephyr input subsystem.
+
+if MA730_INPUT
+
+choice MA730_INPUT_TRIGGER
+	prompt "Trigger mode"
+	default MA730_INPUT_TRIGGER_GLOBAL_THREAD
+
+config MA730_INPUT_TRIGGER_GLOBAL_THREAD
+	bool "Global system workqueue"
+	help
+	  Encoder polls run on the system workqueue.
+	  Switch to the dedicated thread option if polls are delayed by
+	  other work items causing irregular scroll latency.
+
+config MA730_INPUT_TRIGGER_OWN_THREAD
+	bool "Dedicated thread"
+	help
+	  Encoder polls run on a dedicated thread. Use if the global
+	  workqueue is causing irregular scroll latency under heavy load.
+
+endchoice
+
+config MA730_INPUT_POLL_INTERVAL_MS
+	int "Poll interval (milliseconds)"
+	default 8
+	range 1 8
+	help
+	  Encoder sampling interval in milliseconds.
+	  Lower values increase polling frequency and SPI traffic.
+
+config MA730_INPUT_THREAD_PRIORITY
+	int "Thread priority (cooperative)"
+	depends on MA730_INPUT_TRIGGER_OWN_THREAD
+	default 10
+	help
+	  Priority passed to K_PRIO_COOP() for the encoder poll thread.
+	  Valid cooperative priorities are 0 through
+	  CONFIG_NUM_COOP_PRIORITIES - 1.
+
+config MA730_INPUT_THREAD_STACK_SIZE
+	int "Thread stack size"
+	depends on MA730_INPUT_TRIGGER_OWN_THREAD
+	default 2048
+	help
+	  Stack size in bytes for the encoder poll thread. Reduce only
+	  after measuring with CONFIG_THREAD_ANALYZER.
+
+endif
