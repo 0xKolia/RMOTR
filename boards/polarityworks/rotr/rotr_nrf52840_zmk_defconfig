@@ -25,10 +25,15 @@ CONFIG_ZMK_USB=y
 CONFIG_ZMK_BLE=y
 
 # WS2812 underglow.
+# The LED strip is powered through the gpio1.11 ext-power rail. We keep the
+# rail enabled and managed by src/rgb_indicator.c, and deliberately do NOT
+# set CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER: coupling the rail to RGB on/off was
+# the dead-underglow bug (ON_START never enabled the rail) and would also
+# power-cycle the rail on every off-state flash. RGB on/off now only gates
+# colour/animation; the rail stays powered.
+CONFIG_ZMK_EXT_POWER=y
 CONFIG_ZMK_RGB_UNDERGLOW=y
 CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=y
-CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=y
-CONFIG_ZMK_EXT_POWER=y
 
 CONFIG_ZMK_RGB_UNDERGLOW_ON_START=y
 CONFIG_ZMK_RGB_UNDERGLOW_EFF_START=0

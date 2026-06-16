@@ -73,21 +73,50 @@ A `zmk_layer_state_changed` listener (work-queued, so no locking) shows the
 *excluding* the selector layer — so during selection the underglow previews
 the candidate landing layer.
 
-- **Underglow ON:** layer colour shown persistently, updates on every change.
+- **Underglow ON:** layer colour shown persistently (via ZMK `set_hsb`),
+  updates on every change.
 - **Underglow OFF** (toggled with HOLD MIDDLE + TAP RIGHT, persisted by ZMK):
-  stays off, except a layer change briefly illuminates the new colour and
+  stays dark, except a layer change briefly illuminates the new colour and
   fades to off — a momentary indicator. Duration is `ROTR_RGB_FLASH_MS`
   (default 600 ms) over `ROTR_RGB_FADE_STEPS` (8) steps.
-- The flash uses ZMK's `on()`/`set_hsb()`/`off()`, which persist via a
-  *debounced* save, so a brief flash nets out to the user's real preference.
-  The canonical full-brightness colour is restored before the final `off()`
-  so a later toggle-on shows the correct colour.
-- Boot: a one-shot work 1.5 s after start sets the current layer colour
-  (white at boot via `CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0`).
+- The off-state flash is written **straight to the strip** with
+  `led_strip_update_rgb` (the module converts HSB→RGB itself). It never calls
+  ZMK's `on()`/`off()`, so it does not flip the persisted on/off state — this
+  is what removes the earlier mid-flash toggle edge case (see below). ZMK's
+  tick is stopped while off, so the direct writes never contend with it; if
+  the user toggles RGB on mid-flash, the fade detects it and bows out.
+- Boot: a one-shot work 1.5 s after start brings up the ext-power rail and
+  sets the current layer colour (white at boot via
+  `CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0`).
 
-Known edge (flagged for hardware test): pressing RGB_TOG *during* the brief
-off-state flash may toggle the wrong way, since the underglow is momentarily on.
-The window is ~600 ms.
+### Root cause of the dead-underglow bug (and the fix)
+The LED strip is powered through the **gpio1.11 ext-power rail**. With
+`CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER`, ZMK only enables that rail inside
+`zmk_rgb_underglow_on()` — but the `ON_START` boot path just starts the
+animation tick and **never calls `on()`**, and the rail's default-on state is
+overridden by a stale persisted "off" in NVS. So the tick rendered onto an
+**unpowered strip** and stayed dark in every state, on every layer. A
+direct-drive test that forced the rail on (`ext_power_enable`) and wrote the
+strip directly lit it perfectly — proving the strip/SPI/pinctrl/power path is
+fine and the fault was purely this power-gating. (The merged `zephyr.dts` and
+`.config` for `led_strip`/`ws2812`/`spi`/pinctrl were byte-identical to the
+known-good original ROTR firmware, which is why the config/DT layer was ruled
+out.)
+
+**Fix:** the rail is **decoupled** from RGB on/off — the board defconfig does
+**not** set `CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER`. `src/rgb_indicator.c` (the
+owner of the RGB subsystem) enables the rail once at startup, after settings
+load, and keeps it powered. RGB on/off now only gates colour/animation.
+
+### RGB-off rail choice (per the build brief's question)
+On "off" the strip **just goes dark; the ext-power rail stays powered.** I
+chose this over cutting the rail because cutting it would (a) re-introduce the
+mid-flash toggle edge case and (b) add the rail's enable latency to every
+off-state flash. The cost is a few mA for the (unlit) strip rail while RGB is
+off — acceptable on a USB/BLE macropad, and it makes the off-state flash
+instant and glitch-free. The earlier mid-flash toggle edge case is now gone:
+the flash never changes ZMK's on/off state, so `RGB_TOG` always does the
+expected thing.
 
 ## Activating a reserved layer (5–8) — devicetree only, no C change
 In `boards/polarityworks/rotr/rotr_nrf52840_zmk.dts`, `ma730` node:
