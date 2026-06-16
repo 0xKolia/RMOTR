@@ -2,33 +2,109 @@
  * Copyright (c) 2026 Carl Henriksson
  * SPDX-License-Identifier: MIT
  *
- * Button order matches col-gpios in the DTS:
- * col 0 = right, col 1 = middle, col 2 = left.
+ * ROTR "Path C" Stage 2 keymap: full layer map for the dual-mode knob.
+ *
+ * Key positions follow the matrix scan order (1 row x 3 cols). After the
+ * Stage 1 hardware test the physical mapping is:
+ *   position 0 = physical LEFT   = Copy       &kp LC(C)
+ *   position 1 = physical MIDDLE = Select-All &kp LC(A)
+ *   position 2 = physical RIGHT  = Paste      &kp LC(V)
+ * (Stage 1 had left/right swapped; this file fixes the order.)
+ *
+ * The three buttons stay Copy / Select-All / Paste on every layer: layers
+ * 1-4 leave them &trans so they fall through to the default layer.
+ *
+ * The knob's behaviour per layer is decided in the MA730 driver's mode
+ * table (sensor world vs scroll world); see drivers/sensor/ma730.
+ *
+ * TEMPORARY layer switching for Stage 2 testing (the real hold-middle-turn
+ * selector is Stage 3): two- and three-button combos toggle a layer on/off
+ * via &tog. Single presses remain Copy/Select-All/Paste.
+ *   LEFT  + MIDDLE          -> toggle layer 1 (brightness)
+ *   MIDDLE + RIGHT          -> toggle layer 2 (volume)
+ *   LEFT  + RIGHT           -> toggle layer 3 (scroll-v)
+ *   LEFT  + MIDDLE + RIGHT  -> toggle layer 4 (scroll-h)
+ * Layer 0 (default) is the state with nothing toggled. Toggle a layer ON,
+ * test it, then toggle it OFF before testing the next.
  */
 
 #include <behaviors.dtsi>
 #include <dt-bindings/zmk/keys.h>
 
 / {
+	combos {
+		compatible = "zmk,combos";
+
+		combo_brightness {
+			timeout-ms = <60>;
+			key-positions = <0 1>;
+			bindings = <&tog 1>;
+		};
+
+		combo_volume {
+			timeout-ms = <60>;
+			key-positions = <1 2>;
+			bindings = <&tog 2>;
+		};
+
+		combo_scroll_v {
+			timeout-ms = <60>;
+			key-positions = <0 2>;
+			bindings = <&tog 3>;
+		};
+
+		combo_scroll_h {
+			timeout-ms = <60>;
+			key-positions = <0 1 2>;
+			bindings = <&tog 4>;
+		};
+	};
+
 	keymap {
 		compatible = "zmk,keymap";
 
-		/*
-		 * Stage 1: single layer.
-		 * Binding order follows col-gpios (col 0 = right, col 1 =
-		 * middle, col 2 = left):
-		 *   right  = Paste      LC(V)
-		 *   middle = Select-All LC(A)
-		 *   left   = Copy       LC(C)
-		 * The knob is a smooth vertical mouse wheel via the MA730
-		 * driver's INPUT_REL_WHEEL events (see ma730_listener in the
-		 * board DTS); no sensor-bindings here this stage.
-		 */
+		/* Layer 0: default. Knob inactive. */
 		default_layer {
 			bindings = <
-				&kp LC(V)
-				&kp LC(A)
 				&kp LC(C)
+				&kp LC(A)
+				&kp LC(V)
+			>;
+		};
+
+		/* Layer 1: brightness. Knob -> F13 (CW) / F14 (CCW). */
+		brightness_layer {
+			bindings = <
+				&trans
+				&trans
+				&trans
+			>;
+		};
+
+		/* Layer 2: volume. Knob -> Vol Up (CW) / Vol Down (CCW). */
+		volume_layer {
+			bindings = <
+				&trans
+				&trans
+				&trans
+			>;
+		};
+
+		/* Layer 3: scroll-v. Knob -> smooth vertical wheel. */
+		scroll_v_layer {
+			bindings = <
+				&trans
+				&trans
+				&trans
+			>;
+		};
+
+		/* Layer 4: scroll-h. Knob -> smooth horizontal wheel. */
+		scroll_h_layer {
+			bindings = <
+				&trans
+				&trans
+				&trans
 			>;
 		};
 	};

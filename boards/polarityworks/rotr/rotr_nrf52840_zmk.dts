@@ -53,7 +53,14 @@
 	ma730_listener: ma730-listener {
 		compatible = "zmk,input-listener";
 		device = <&ma730>;
-		input-processors = <&zip_scroll_scaler 1 20>;
+		/*
+		 * Scroll smoothness knob (Stage 2). zip_scroll_scaler scales
+		 * BOTH INPUT_REL_WHEEL and INPUT_REL_HWHEEL with track-remainders,
+		 * so vertical and horizontal share one divisor. The driver emits
+		 * ~1024 fine units/rev; <mult divisor> = <1 16> meters that to
+		 * ~64 notches/rev. Tune feel by changing the 16 (higher = slower).
+		 */
+		input-processors = <&zip_scroll_scaler 1 16>;
 	};
 };
 
@@ -81,8 +88,19 @@ zephyr_udc0: &usbd {
 		compatible = "polarityworks,ma730-input";
 		reg = <0>;
 		spi-max-frequency = <DT_FREQ_M(8)>;
-		scroll-divisor = <1>;
 		reversal-threshold = <10>;
+
+		/* Scroll layers: ~1024 fine units/rev (see binding). */
+		scroll-counts-per-unit = <64>;
+		/* Keyboard layers: ~24 detents/rev for brightness/volume. */
+		key-counts-per-detent = <2731>;
+		/* Velocity acceleration: gain 6, capped at 4x. 0 gain = off. */
+		scroll-accel-gain = <6>;
+		scroll-accel-max = <1024>;
+		/*
+		 * Default directions: CW scrolls DOWN and pans RIGHT. Add
+		 * invert-scroll / invert-hscroll here to flip if needed.
+		 */
 	};
 };
 
