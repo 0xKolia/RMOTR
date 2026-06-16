@@ -34,6 +34,9 @@ CONFIG_ZMK_BLE=y
 CONFIG_ZMK_EXT_POWER=y
 CONFIG_ZMK_RGB_UNDERGLOW=y
 CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=y
+# Must be explicit =n: ZMK's Kconfig.defaults forces this on by default, so
+# merely omitting it leaves the rail coupled to RGB on/off (the bug).
+CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=n
 
 CONFIG_ZMK_RGB_UNDERGLOW_ON_START=y
 CONFIG_ZMK_RGB_UNDERGLOW_EFF_START=0
