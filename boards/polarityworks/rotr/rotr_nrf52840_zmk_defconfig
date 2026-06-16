@@ -30,9 +30,19 @@ CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=y
 CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=y
 CONFIG_ZMK_EXT_POWER=y
 
-CONFIG_ZMK_RGB_UNDERGLOW_ON_START=y
+# DIAGNOSTIC BUILD: USB logging + low-level direct-drive of the strip.
+# Underglow stays compiled (so &rgb_ug in the keymap still builds) but is
+# dormant at boot (ON_START=n, indicator off) so it does not fight the
+# direct-drive thread, which owns the strip and logs device_is_ready() +
+# led_strip_update_rgb() return codes over USB.
+CONFIG_ZMK_USB_LOGGING=y
+CONFIG_ROTR_RGB_DIAG=y
+CONFIG_ROTR_RGB_INDICATOR=n
+CONFIG_LED_STRIP_LOG_LEVEL_DBG=y
+CONFIG_SPI_LOG_LEVEL_DBG=y
+
+CONFIG_ZMK_RGB_UNDERGLOW_ON_START=n
 CONFIG_ZMK_RGB_UNDERGLOW_EFF_START=0
-# Start white (layer 0 colour); the per-layer indicator takes over after boot.
 CONFIG_ZMK_RGB_UNDERGLOW_HUE_START=0
 CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0
 CONFIG_ZMK_RGB_UNDERGLOW_BRT_START=80

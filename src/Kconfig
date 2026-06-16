@@ -9,3 +9,12 @@ config ROTR_RGB_INDICATOR
 	  Show the active keymap layer's colour on the underglow via a
 	  layer-state-changed listener. When the underglow is toggled off it
 	  stays off, except a brief fade-flash on each layer change.
+
+config ROTR_RGB_DIAG
+	bool "ROTR low-level LED strip direct-drive diagnostic"
+	depends on LED_STRIP
+	default n
+	help
+	  THROWAWAY: bypass ZMK underglow and drive the strip directly at
+	  boot, logging device_is_ready() and led_strip_update_rgb() return
+	  codes over USB. For debugging dead underglow only. Do not ship.
