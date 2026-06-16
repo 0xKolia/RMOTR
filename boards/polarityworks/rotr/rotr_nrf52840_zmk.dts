@@ -7,8 +7,10 @@
 #include <nordic/nrf52840_qiaa.dtsi>
 #include <common/nordic/nrf52840_uf2_boot_mode.dtsi>
 #include <dt-bindings/led/led.h>
+#include <dt-bindings/zmk/keys.h>
 #include <input/processors.dtsi>
 #include "rotr-pinctrl.dtsi"
+#include "rotr-ma730.h"
 
 / {
 	model = "ROTR";
@@ -54,13 +56,15 @@
 		compatible = "zmk,input-listener";
 		device = <&ma730>;
 		/*
-		 * Scroll smoothness knob (Stage 2). zip_scroll_scaler scales
-		 * BOTH INPUT_REL_WHEEL and INPUT_REL_HWHEEL with track-remainders,
-		 * so vertical and horizontal share one divisor. The driver emits
-		 * ~1024 fine units/rev; <mult divisor> = <1 16> meters that to
-		 * ~64 notches/rev. Tune feel by changing the 16 (higher = slower).
+		 * Scroll smoothness knob. zip_scroll_scaler scales BOTH
+		 * INPUT_REL_WHEEL and INPUT_REL_HWHEEL with track-remainders, so
+		 * vertical and horizontal share one divisor. The driver emits
+		 * ~1024 fine units/rev; <mult divisor> = <1 32> meters that to
+		 * ~32 notches/rev (Stage 3 halved it from 16). Tune feel by
+		 * changing the 32 (higher = slower). Selector resolution is
+		 * separate (select-counts-per-step on the ma730 node).
 		 */
-		input-processors = <&zip_scroll_scaler 1 16>;
+		input-processors = <&zip_scroll_scaler 1 32>;
 	};
 };
 
@@ -90,9 +94,59 @@ zephyr_udc0: &usbd {
 		spi-max-frequency = <DT_FREQ_M(8)>;
 		reversal-threshold = <10>;
 
+		/*
+		 * Per-layer knob mode table (MA730_MODE_* from rotr-ma730.h),
+		 * indexed by layer. Active layers 0-4, reserved 5-8, selector 9.
+		 * To activate a reserved layer: set its mode + keycodes below and
+		 * raise select-layer-count -- no C change needed.
+		 */
+		layer-modes = <
+			MA730_MODE_INACTIVE	/* 0 default    */
+			MA730_MODE_KEY		/* 1 brightness */
+			MA730_MODE_KEY		/* 2 arrows     */
+			MA730_MODE_SCROLL_H	/* 3 scroll-h   */
+			MA730_MODE_SCROLL_V	/* 4 scroll-v   */
+			MA730_MODE_KEY		/* 5 reserved: volume (pre-loaded) */
+			MA730_MODE_INACTIVE	/* 6 reserved   */
+			MA730_MODE_INACTIVE	/* 7 reserved   */
+			MA730_MODE_INACTIVE	/* 8 reserved   */
+			MA730_MODE_SELECT	/* 9 selector   */
+		>;
+		/* Clockwise keycode per KEY layer (0 = none). */
+		layer-keycodes-cw = <
+			0		/* 0 */
+			F13		/* 1 brightness up   */
+			RIGHT		/* 2 arrow right     */
+			0		/* 3 */
+			0		/* 4 */
+			C_VOL_UP	/* 5 reserved volume */
+			0		/* 6 */
+			0		/* 7 */
+			0		/* 8 */
+			0		/* 9 */
+		>;
+		/* Counter-clockwise keycode per KEY layer (0 = none). */
+		layer-keycodes-ccw = <
+			0		/* 0 */
+			F14		/* 1 brightness down */
+			LEFT		/* 2 arrow left      */
+			0		/* 3 */
+			0		/* 4 */
+			C_VOL_DN	/* 5 reserved volume */
+			0		/* 6 */
+			0		/* 7 */
+			0		/* 8 */
+			0		/* 9 */
+		>;
+
+		/* Selector cycles layers 0..(count-1); 5 => active 0-4 only. */
+		select-layer-count = <5>;
+		/* ~8 selector steps/rev, independent of scroll sensitivity. */
+		select-counts-per-step = <8192>;
+
 		/* Scroll layers: ~1024 fine units/rev (see binding). */
 		scroll-counts-per-unit = <64>;
-		/* Keyboard layers: ~24 detents/rev for brightness/volume. */
+		/* Keyboard layers: ~24 detents/rev. */
 		key-counts-per-detent = <2731>;
 		/* Velocity acceleration: gain 6, capped at 4x. 0 gain = off. */
 		scroll-accel-gain = <6>;

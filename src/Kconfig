@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Carl Henriksson
+# SPDX-License-Identifier: MIT
+
+config ROTR_RGB_INDICATOR
+	bool "ROTR per-layer RGB underglow indicator"
+	depends on ZMK_RGB_UNDERGLOW
+	default y
+	help
+	  Show the active keymap layer's colour on the underglow via a
+	  layer-state-changed listener. When the underglow is toggled off it
+	  stays off, except a brief fade-flash on each layer change.

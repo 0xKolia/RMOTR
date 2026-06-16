@@ -2,109 +2,115 @@
  * Copyright (c) 2026 Carl Henriksson
  * SPDX-License-Identifier: MIT
  *
- * ROTR "Path C" Stage 2 keymap: full layer map for the dual-mode knob.
+ * ROTR "Path C" Stage 3 keymap.
  *
- * Key positions follow the matrix scan order (1 row x 3 cols). After the
- * Stage 1 hardware test the physical mapping is:
- *   position 0 = physical LEFT   = Copy       &kp LC(C)
- *   position 1 = physical MIDDLE = Select-All &kp LC(A)
- *   position 2 = physical RIGHT  = Paste      &kp LC(V)
- * (Stage 1 had left/right swapped; this file fixes the order.)
+ * Key positions (1 row x 3 cols), physical mapping confirmed on hardware:
+ *   position 0 = LEFT   = Copy       &kp LC(C)
+ *   position 1 = MIDDLE = Select-All / hold = selector
+ *   position 2 = RIGHT  = Paste      &kp LC(V)
  *
- * The three buttons stay Copy / Select-All / Paste on every layer: layers
- * 1-4 leave them &trans so they fall through to the default layer.
+ * MIDDLE is a hold-tap (&lt_sel): TAP = Select-All LC(A); HOLD = momentary
+ * selector layer. While the selector layer is held the knob is in "select"
+ * mode (driver layer-modes table) and turning cycles the active base layer
+ * (0-4); releasing lands on it. This reimplements the stock ROTR selector.
  *
- * The knob's behaviour per layer is decided in the MA730 driver's mode
- * table (sensor world vs scroll world); see drivers/sensor/ma730.
+ * The three buttons stay Copy / Select-All / Paste on every active layer:
+ * layers 1-8 leave them &trans so they fall through to the default layer.
  *
- * TEMPORARY layer switching for Stage 2 testing (the real hold-middle-turn
- * selector is Stage 3): two- and three-button combos toggle a layer on/off
- * via &tog. Single presses remain Copy/Select-All/Paste.
- *   LEFT  + MIDDLE          -> toggle layer 1 (brightness)
- *   MIDDLE + RIGHT          -> toggle layer 2 (volume)
- *   LEFT  + RIGHT           -> toggle layer 3 (scroll-v)
- *   LEFT  + MIDDLE + RIGHT  -> toggle layer 4 (scroll-h)
- * Layer 0 (default) is the state with nothing toggled. Toggle a layer ON,
- * test it, then toggle it OFF before testing the next.
+ * The knob behaviour per layer is decided in the MA730 driver's DT mode
+ * table (boards/polarityworks/rotr/rotr_nrf52840_zmk.dts: layer-modes).
+ *
+ * Layers: 0 default, 1 brightness, 2 arrows, 3 scroll-h, 4 scroll-v,
+ *         5-8 reserved (inactive scaffolds, excluded from the selector
+ *         until select-layer-count is raised), 9 selector.
  */
 
 #include <behaviors.dtsi>
 #include <dt-bindings/zmk/keys.h>
+#include <dt-bindings/zmk/bt.h>
+#include <dt-bindings/zmk/rgb.h>
+#include "rotr-ma730.h"
+
+#define SELECTOR ROTR_SELECT_LAYER
 
 / {
-	combos {
-		compatible = "zmk,combos";
-
-		combo_brightness {
-			timeout-ms = <60>;
-			key-positions = <0 1>;
-			bindings = <&tog 1>;
-		};
-
-		combo_volume {
-			timeout-ms = <60>;
-			key-positions = <1 2>;
-			bindings = <&tog 2>;
-		};
-
-		combo_scroll_v {
-			timeout-ms = <60>;
-			key-positions = <0 2>;
-			bindings = <&tog 3>;
-		};
-
-		combo_scroll_h {
-			timeout-ms = <60>;
-			key-positions = <0 1 2>;
-			bindings = <&tog 4>;
+	behaviors {
+		/*
+		 * Middle button: tap = Select-All, hold = momentary selector.
+		 * hold-preferred so holding-then-turning (and hold+tap-right for
+		 * the RGB toggle) engages the selector reliably; a quick tap
+		 * still yields Select-All. tapping-term-ms is the feel tweak.
+		 */
+		lt_sel: layer_tap_selector {
+			compatible = "zmk,behavior-hold-tap";
+			#binding-cells = <2>;
+			flavor = "hold-preferred";
+			tapping-term-ms = <200>;
+			bindings = <&mo>, <&kp>;
 		};
 	};
 
 	keymap {
 		compatible = "zmk,keymap";
 
-		/* Layer 0: default. Knob inactive. */
+		/* 0: default — knob inactive. */
 		default_layer {
 			bindings = <
 				&kp LC(C)
-				&kp LC(A)
+				&lt_sel SELECTOR LC(A)
 				&kp LC(V)
 			>;
 		};
 
-		/* Layer 1: brightness. Knob -> F13 (CW) / F14 (CCW). */
+		/* 1: brightness — F13 (CW) / F14 (CCW). */
 		brightness_layer {
-			bindings = <
-				&trans
-				&trans
-				&trans
-			>;
+			bindings = <&trans &trans &trans>;
 		};
 
-		/* Layer 2: volume. Knob -> Vol Up (CW) / Vol Down (CCW). */
-		volume_layer {
-			bindings = <
-				&trans
-				&trans
-				&trans
-			>;
+		/* 2: arrows — Right (CW) / Left (CCW). */
+		arrows_layer {
+			bindings = <&trans &trans &trans>;
 		};
 
-		/* Layer 3: scroll-v. Knob -> smooth vertical wheel. */
-		scroll_v_layer {
-			bindings = <
-				&trans
-				&trans
-				&trans
-			>;
-		};
-
-		/* Layer 4: scroll-h. Knob -> smooth horizontal wheel. */
+		/* 3: scroll-h — smooth horizontal wheel. */
 		scroll_h_layer {
+			bindings = <&trans &trans &trans>;
+		};
+
+		/* 4: scroll-v — smooth vertical wheel (CW = down). */
+		scroll_v_layer {
+			bindings = <&trans &trans &trans>;
+		};
+
+		/* 5: reserved — pre-loaded volume (inactive until count raised). */
+		reserved_5_layer {
+			bindings = <&trans &trans &trans>;
+		};
+
+		/* 6: reserved scaffold. */
+		reserved_6_layer {
+			bindings = <&trans &trans &trans>;
+		};
+
+		/* 7: reserved scaffold. */
+		reserved_7_layer {
+			bindings = <&trans &trans &trans>;
+		};
+
+		/* 8: reserved scaffold. */
+		reserved_8_layer {
+			bindings = <&trans &trans &trans>;
+		};
+
+		/*
+		 * 9: selector (held). LEFT = clear BT bonds, MIDDLE = trans (the
+		 * hold itself), RIGHT = toggle underglow (HOLD MIDDLE + TAP RIGHT).
+		 */
+		selector_layer {
 			bindings = <
+				&bt BT_CLR
 				&trans
-				&trans
-				&trans
+				&rgb_ug RGB_TOG
 			>;
 		};
 	};

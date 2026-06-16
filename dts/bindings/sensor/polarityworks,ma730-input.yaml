@@ -5,9 +5,10 @@ description: |
   MagAlpha MA730 absolute magnetic rotary encoder.
 
   Polls angle over SPI and, depending on the highest active ZMK keymap
-  layer, drives either the keyboard world (taps F13/F14, Volume Up/Down)
-  or the pointing world (smooth INPUT_REL_WHEEL / INPUT_REL_HWHEEL).
-  The per-layer mode table lives in the driver (ma730_input.c).
+  layer, drives one of several "worlds" selected by the per-layer
+  `layer-modes` array (see boards/polarityworks/rotr/rotr-ma730.h):
+  inactive, keyboard taps (layer-keycodes-cw / -ccw), smooth vertical or
+  horizontal scrolling, or the hold-middle layer selector.
 
   Requires SPI mode 3. spi-max-frequency must not exceed the MA730 limit.
 
@@ -16,6 +17,45 @@ compatible: "polarityworks,ma730-input"
 include: spi-device.yaml
 
 properties:
+  layer-modes:
+    type: array
+    required: true
+    description: |
+      Per-layer knob mode, indexed by ZMK layer index. Use the MA730_MODE_*
+      values from rotr-ma730.h. Length must match layer-keycodes-cw/-ccw.
+
+  layer-keycodes-cw:
+    type: array
+    required: true
+    description: |
+      Per-layer encoded keycode tapped on clockwise rotation (MA730_MODE_KEY
+      layers only; 0 elsewhere). Same length/order as layer-modes.
+
+  layer-keycodes-ccw:
+    type: array
+    required: true
+    description: |
+      Per-layer encoded keycode tapped on counter-clockwise rotation
+      (MA730_MODE_KEY layers only; 0 elsewhere). Same length as layer-modes.
+
+  select-layer-count:
+    type: int
+    default: 5
+    description: |
+      Number of layers the hold-middle selector cycles through, starting at
+      0. Default 5 => cycles layers 0-4; reserved layers 5+ are excluded
+      until this is raised. THE single value to bump when activating a
+      reserved layer.
+
+  select-counts-per-step:
+    type: int
+    default: 8192
+    description: |
+      Raw encoder counts per selector advance, independent of scroll
+      sensitivity (the selector never uses zip_scroll_scaler). 65536 / 8192
+      = ~8 steps per revolution: a coarse, deliberate one-layer-per-nudge
+      feel. Larger = coarser.
+
   reversal-threshold:
     type: int
     default: 10
@@ -27,43 +67,37 @@ properties:
     type: int
     default: 64
     description: |
-      Raw encoder counts per emitted wheel unit on the scroll layers.
-      The MA730 is 16-bit (65536 counts/rev), so 64 -> ~1024 fine units
-      per revolution before the input-processor-scaler divides them down.
-      Lower = more sensitive (more wheel units per turn). Must be >= 1.
+      Raw encoder counts per emitted wheel unit on scroll layers. The MA730
+      is 16-bit (65536 counts/rev), so 64 -> ~1024 fine units/rev before the
+      input-processor-scaler divides them down. Lower = more sensitive.
 
   key-counts-per-detent:
     type: int
     default: 2731
     description: |
-      Raw encoder counts per key tap on the keyboard layers (brightness,
-      volume). 65536 / 2731 ~= 24 detents per revolution, i.e. a normal
-      encoder feel. Lower = more taps per turn. Must be >= 1.
+      Raw encoder counts per key tap on keyboard layers. 65536 / 2731 ~= 24
+      detents/rev. Lower = more taps per turn.
 
   scroll-accel-gain:
     type: int
     default: 6
     description: |
-      Velocity-based scroll acceleration. The per-poll speed (raw counts
-      since the last ~8 ms poll) is multiplied by this gain and added to a
-      256-based unity factor, so faster turns scroll proportionally further.
-      Set to 0 to disable acceleration (linear scrolling).
+      Velocity-based scroll acceleration. Per-poll speed (raw counts since
+      the last ~8 ms poll) times this gain is added to a 256-based unity
+      factor. 0 disables acceleration (linear scrolling).
 
   scroll-accel-max:
     type: int
     default: 1024
     description: |
-      Upper clamp on the acceleration factor (256 = 1x). 1024 = up to 4x at
-      high speed. Only used when scroll-accel-gain > 0.
+      Upper clamp on the acceleration factor (256 = 1x, 1024 = up to 4x).
 
   invert-scroll:
     type: boolean
     description: |
-      Invert VERTICAL wheel direction. By default clockwise rotation scrolls
-      DOWN (standard convention); set this to make clockwise scroll up.
+      Invert VERTICAL wheel direction. Default: clockwise scrolls DOWN.
 
   invert-hscroll:
     type: boolean
     description: |
-      Invert HORIZONTAL wheel direction. By default clockwise rotation pans
-      right.
+      Invert HORIZONTAL wheel direction. Default: clockwise pans RIGHT.

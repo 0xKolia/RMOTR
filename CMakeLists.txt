@@ -2,3 +2,4 @@
 # SPDX-License-Identifier: MIT
 
 add_subdirectory(drivers/sensor/ma730)
+add_subdirectory(src)

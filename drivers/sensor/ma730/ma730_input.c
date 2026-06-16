@@ -2,29 +2,39 @@
  * Copyright (c) 2026 Carl Henriksson
  * SPDX-License-Identifier: MIT
  *
- * Layer-aware dual-mode MA730 encoder driver (ROTR "Path C", Stage 2).
+ * Layer-aware dual-mode MA730 encoder driver (ROTR "Path C").
  *
  * MOTR's original driver emitted INPUT_REL_WHEEL unconditionally. This
  * extension keeps MOTR's absolute-angle maths (wrapped delta + reversal
- * clearing) untouched and adds a per-layer mode table: on each poll the
- * driver reads the highest active ZMK keymap layer and routes rotation
- * into the correct "world":
+ * clearing) untouched and, on each poll, reads the highest active ZMK
+ * keymap layer and routes rotation into the world named by that layer in
+ * the devicetree `layer-modes` table:
  *
- *   layer 0 default    -> inactive (no output)
- *   layer 1 brightness -> keyboard: tap F13 (CW) / F14 (CCW)
- *   layer 2 volume     -> keyboard: tap Vol Up (CW) / Vol Down (CCW)
- *   layer 3 scroll-v   -> pointing: smooth INPUT_REL_WHEEL  (vertical)
- *   layer 4 scroll-h   -> pointing: smooth INPUT_REL_HWHEEL (horizontal)
+ *   MA730_MODE_INACTIVE  no output
+ *   MA730_MODE_KEY       tap layer-keycodes-cw (CW) / -ccw (CCW)
+ *   MA730_MODE_SCROLL_V  smooth INPUT_REL_WHEEL  (vertical)
+ *   MA730_MODE_SCROLL_H  smooth INPUT_REL_HWHEEL (horizontal)
+ *   MA730_MODE_SELECT    hold-middle layer selector (cycles base layers)
+ *
+ * Because the mode + keycodes live in devicetree, activating a reserved
+ * layer is a .dts edit (set its mode/keycodes, raise select-layer-count) --
+ * never a C change.
  *
  * Keyboard-world taps are produced by raising ZMK keycode events directly
  * (raise_zmk_keycode_state_changed_from_encoded). A small poll-driven FIFO
  * spaces each press/release one poll apart so the host's HID polling never
- * coalesces a tap away. Scroll-world events are scaled down by the board's
- * zip_scroll_scaler and metered with track-remainders for smoothness; this
- * driver additionally applies optional velocity-based acceleration.
+ * coalesces a tap. Scroll-world events are scaled down by the board's
+ * zip_scroll_scaler with track-remainders; this driver adds optional
+ * velocity acceleration. The selector advances one base layer per
+ * select-counts-per-step counts, independent of scroll sensitivity, and
+ * lands by leaving exactly that layer active when MIDDLE is released.
  *
  * The rotation accumulator is reset on every layer change so a turn that
  * straddles a mode boundary cannot leak a phantom tick into the new world.
+ *
+ * NOTE: ZMK layer indices and IDs are equal here (CONFIG_ZMK_KEYMAP_LAYER
+ * _REORDERING is not enabled), so the layer index from
+ * zmk_keymap_highest_layer_active() is used directly as a layer id.
  */
 
 #define DT_DRV_COMPAT polarityworks_ma730_input
@@ -40,9 +50,10 @@
 
 #include <stdlib.h>
 
-#include <dt-bindings/zmk/keys.h>
 #include <zmk/keymap.h>
 #include <zmk/events/keycode_state_changed.h>
+
+#include "rotr-ma730.h"
 
 LOG_MODULE_REGISTER(ma730_input, CONFIG_INPUT_LOG_LEVEL);
 
@@ -57,35 +68,19 @@ LOG_MODULE_REGISTER(ma730_input, CONFIG_INPUT_LOG_LEVEL);
 /* Pending press/release events drain one per poll (see ma730_service_keys). */
 #define MA730_KEY_QUEUE_LEN	32
 
-/* How the knob behaves on a given layer. */
-enum ma730_world {
-	MA730_INACTIVE = 0,
-	MA730_KEY,
-	MA730_SCROLL,
-};
-
 /*
- * Per-layer mode table (indexed by ZMK layer index). Layers not listed
- * here, or any index past the table, are treated as inactive.
- *
- * Direction convention: a positive wrapped delta is clockwise (CW).
- *   - KEY layers tap cw_key on CW, ccw_key on CCW.
- *   - SCROLL layers emit rel_code; sign handling lives in ma730_scroll().
+ * Per-layer configuration, read from the devicetree (single instance).
+ * Kept at file scope because DT_INST_PROP expands an array property into a
+ * braced initializer that cannot live in the per-instance config struct.
  */
-struct ma730_layer_mode {
-	enum ma730_world	world;
-	uint32_t		cw_key;		/* encoded keycode, KEY only */
-	uint32_t		ccw_key;	/* encoded keycode, KEY only */
-	uint16_t		rel_code;	/* INPUT_REL_*, SCROLL only */
-};
+static const uint8_t  ma730_layer_mode[] = DT_INST_PROP(0, layer_modes);
+static const uint32_t ma730_cw_key[]     = DT_INST_PROP(0, layer_keycodes_cw);
+static const uint32_t ma730_ccw_key[]    = DT_INST_PROP(0, layer_keycodes_ccw);
 
-static const struct ma730_layer_mode ma730_layer_modes[] = {
-	[0] = { .world = MA730_INACTIVE },
-	[1] = { .world = MA730_KEY, .cw_key = F13,      .ccw_key = F14 },
-	[2] = { .world = MA730_KEY, .cw_key = C_VOL_UP, .ccw_key = C_VOL_DN },
-	[3] = { .world = MA730_SCROLL, .rel_code = INPUT_REL_WHEEL },
-	[4] = { .world = MA730_SCROLL, .rel_code = INPUT_REL_HWHEEL },
-};
+BUILD_ASSERT(ARRAY_SIZE(ma730_cw_key) == ARRAY_SIZE(ma730_layer_mode),
+    "layer-keycodes-cw length must match layer-modes");
+BUILD_ASSERT(ARRAY_SIZE(ma730_ccw_key) == ARRAY_SIZE(ma730_layer_mode),
+    "layer-keycodes-ccw length must match layer-modes");
 
 struct ma730_config {
 	struct spi_dt_spec	 spi;
@@ -94,6 +89,8 @@ struct ma730_config {
 	int			 key_counts_per_detent;
 	int			 scroll_accel_gain;
 	int			 scroll_accel_max;
+	int			 select_layer_count;
+	int			 select_counts_per_step;
 	bool			 invert_scroll;
 	bool			 invert_hscroll;
 };
@@ -108,6 +105,7 @@ struct ma730_data {
 	uint16_t		 last_angle;
 	int			 accumulated_counts;
 	uint8_t			 last_layer;
+	uint8_t			 select_index;	/* base layer chosen in selector */
 
 	/* Poll-driven press/release FIFO for keyboard-world taps. */
 	struct ma730_key_event	 key_queue[MA730_KEY_QUEUE_LEN];
@@ -124,17 +122,13 @@ struct ma730_data {
 #endif
 };
 
-static const struct ma730_layer_mode *
+static uint8_t
 ma730_mode_for_layer(uint8_t layer)
 {
-	static const struct ma730_layer_mode inactive = {
-		.world = MA730_INACTIVE,
-	};
-
-	if (layer >= ARRAY_SIZE(ma730_layer_modes)) {
-		return &inactive;
+	if (layer >= ARRAY_SIZE(ma730_layer_mode)) {
+		return MA730_MODE_INACTIVE;
 	}
-	return &ma730_layer_modes[layer];
+	return ma730_layer_mode[layer];
 }
 
 /*
@@ -228,7 +222,7 @@ ma730_service_keys(struct ma730_data *data)
 
 /* Keyboard world: convert accumulated counts into discrete key taps. */
 static void
-ma730_keys(const struct device *dev, const struct ma730_layer_mode *mode)
+ma730_keys(const struct device *dev, uint8_t layer)
 {
 	const struct ma730_config	*cfg = dev->config;
 	struct ma730_data		*data = dev->data;
@@ -243,10 +237,13 @@ ma730_keys(const struct device *dev, const struct ma730_layer_mode *mode)
 
 	data->accumulated_counts -= detents * cfg->key_counts_per_detent;
 
-	keycode = (detents > 0) ? mode->cw_key : mode->ccw_key;
-	n = MIN(abs(detents), MA730_MAX_TAPS_PER_POLL);
+	keycode = (detents > 0) ? ma730_cw_key[layer] : ma730_ccw_key[layer];
+	if (keycode == 0) {
+		return;
+	}
 
-	LOG_DBG("key world: detents=%d taps=%d", detents, n);
+	n = MIN(abs(detents), MA730_MAX_TAPS_PER_POLL);
+	LOG_DBG("key world L%u: detents=%d taps=%d", layer, detents, n);
 
 	for (int i = 0; i < n; i++) {
 		ma730_key_tap(data, keycode);
@@ -255,11 +252,11 @@ ma730_keys(const struct device *dev, const struct ma730_layer_mode *mode)
 
 /* Pointing world: meter accumulated counts into smooth wheel events. */
 static void
-ma730_scroll(const struct device *dev, const struct ma730_layer_mode *mode,
-    int delta)
+ma730_scroll(const struct device *dev, uint8_t mode, int delta)
 {
 	const struct ma730_config	*cfg = dev->config;
 	struct ma730_data		*data = dev->data;
+	uint16_t			 rel_code;
 	int				 units;
 	int				 factor;
 	int				 out;
@@ -293,19 +290,86 @@ ma730_scroll(const struct device *dev, const struct ma730_layer_mode *mode,
 	 * Direction. Positive delta = clockwise. Defaults: CW scrolls DOWN
 	 * (vertical) and pans RIGHT (horizontal); invert-* flips each.
 	 */
-	if (mode->rel_code == INPUT_REL_WHEEL) {
+	if (mode == MA730_MODE_SCROLL_V) {
+		rel_code = INPUT_REL_WHEEL;
 		out = cfg->invert_scroll ? out : -out;
 	} else {
+		rel_code = INPUT_REL_HWHEEL;
 		out = cfg->invert_hscroll ? -out : out;
 	}
 
 	LOG_DBG("scroll world: code=%u units=%d factor=%d out=%d",
-	    mode->rel_code, units, factor, out);
+	    rel_code, units, factor, out);
 
-	err = input_report_rel(dev, mode->rel_code, out, true, K_NO_WAIT);
+	err = input_report_rel(dev, rel_code, out, true, K_NO_WAIT);
 	if (err != 0) {
 		LOG_WRN("failed to report wheel input: %d", err);
 	}
+}
+
+/* Highest active base layer below the selector (the current landing layer). */
+static uint8_t
+ma730_current_base(int count)
+{
+	for (int i = count - 1; i >= 1; i--) {
+		if (zmk_keymap_layer_active((zmk_keymap_layer_id_t)i)) {
+			return (uint8_t)i;
+		}
+	}
+	return 0;
+}
+
+/* Land selection on new_base: leave exactly that base layer active. */
+static void
+ma730_select_apply(struct ma730_data *data, uint8_t new_base)
+{
+	if (new_base == data->select_index) {
+		return;
+	}
+	if (data->select_index != 0) {
+		zmk_keymap_layer_deactivate(
+		    (zmk_keymap_layer_id_t)data->select_index, false);
+	}
+	if (new_base != 0) {
+		zmk_keymap_layer_activate(
+		    (zmk_keymap_layer_id_t)new_base, false);
+	}
+	data->select_index = new_base;
+}
+
+/*
+ * Selector world: advance one base layer per select-counts-per-step counts.
+ * The selector layer itself stays held (highest active) throughout, so the
+ * base layer changed here becomes the landing layer when MIDDLE is released.
+ */
+static void
+ma730_select(const struct device *dev)
+{
+	const struct ma730_config	*cfg = dev->config;
+	struct ma730_data		*data = dev->data;
+	int				 count = cfg->select_layer_count;
+	int				 steps;
+	int				 sel;
+
+	if (count < 1) {
+		count = 1;
+	}
+
+	steps = data->accumulated_counts / cfg->select_counts_per_step;
+	if (steps == 0) {
+		return;
+	}
+
+	data->accumulated_counts -= steps * cfg->select_counts_per_step;
+
+	/* CW advances to the next layer; wrap within 0..count-1. */
+	sel = ((int)data->select_index + steps) % count;
+	if (sel < 0) {
+		sel += count;
+	}
+
+	LOG_DBG("selector: -> layer %d (of %d)", sel, count);
+	ma730_select_apply(data, (uint8_t)sel);
 }
 
 static void
@@ -313,9 +377,9 @@ ma730_poll(const struct device *dev)
 {
 	const struct ma730_config	*cfg = dev->config;
 	struct ma730_data		*data = dev->data;
-	const struct ma730_layer_mode	*mode;
 	uint16_t			 raw;
 	uint8_t				 layer;
+	uint8_t				 mode;
 	int				 delta;
 	int				 err;
 
@@ -334,7 +398,8 @@ ma730_poll(const struct device *dev)
 	/*
 	 * Critical edge case: on any layer (hence mode) change, discard the
 	 * delta that straddled the boundary and reset the accumulator so a
-	 * single turn cannot leak a phantom tick into the new world.
+	 * single turn cannot leak a phantom tick into the new world. When
+	 * entering the selector, seed the selection with the current base.
 	 */
 	if (layer != data->last_layer) {
 		LOG_DBG("layer change %u -> %u, resetting accumulator",
@@ -342,6 +407,10 @@ ma730_poll(const struct device *dev)
 		data->last_layer = layer;
 		data->accumulated_counts = 0;
 		data->last_angle = raw;
+		if (mode == MA730_MODE_SELECT) {
+			data->select_index =
+			    ma730_current_base(cfg->select_layer_count);
+		}
 		return;
 	}
 
@@ -367,14 +436,18 @@ ma730_poll(const struct device *dev)
 
 	data->accumulated_counts += delta;
 
-	switch (mode->world) {
-	case MA730_KEY:
-		ma730_keys(dev, mode);
+	switch (mode) {
+	case MA730_MODE_KEY:
+		ma730_keys(dev, layer);
 		break;
-	case MA730_SCROLL:
+	case MA730_MODE_SCROLL_V:
+	case MA730_MODE_SCROLL_H:
 		ma730_scroll(dev, mode, delta);
 		break;
-	case MA730_INACTIVE:
+	case MA730_MODE_SELECT:
+		ma730_select(dev);
+		break;
+	case MA730_MODE_INACTIVE:
 	default:
 		/* Knob does nothing on this layer; never build up counts. */
 		data->accumulated_counts = 0;
@@ -441,6 +514,7 @@ ma730_init(const struct device *dev)
 	data->dev = dev;
 	data->last_layer = 0;
 	data->accumulated_counts = 0;
+	data->select_index = 0;
 	data->key_head = 0;
 	data->key_count = 0;
 
@@ -450,6 +524,10 @@ ma730_init(const struct device *dev)
 	}
 	if (cfg->key_counts_per_detent <= 0) {
 		LOG_ERR("key-counts-per-detent must be >= 1");
+		return -EINVAL;
+	}
+	if (cfg->select_counts_per_step <= 0) {
+		LOG_ERR("select-counts-per-step must be >= 1");
 		return -EINVAL;
 	}
 	if (cfg->reversal_threshold <= 0) {
@@ -506,6 +584,10 @@ ma730_init(const struct device *dev)
 		    DT_INST_PROP(n, key_counts_per_detent),		\
 		.scroll_accel_gain  = DT_INST_PROP(n, scroll_accel_gain),\
 		.scroll_accel_max   = DT_INST_PROP(n, scroll_accel_max),\
+		.select_layer_count =					\
+		    DT_INST_PROP(n, select_layer_count),		\
+		.select_counts_per_step =				\
+		    DT_INST_PROP(n, select_counts_per_step),		\
 		.invert_scroll      = DT_INST_PROP(n, invert_scroll),	\
 		.invert_hscroll     = DT_INST_PROP(n, invert_hscroll),	\
 	};								\

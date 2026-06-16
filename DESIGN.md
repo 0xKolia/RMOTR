@@ -5,90 +5,130 @@ Aftermarket ZMK firmware for the Polarity Works ROTR, forked from
 MA730 driver, board definition, DTS bindings and the upstream-ZMK pin are
 reused; the additions below are ours.
 
-## Stage 1 — base
-- Three buttons on a single layer: Copy `LC(C)`, Select-All `LC(A)`,
-  Paste `LC(V)`.
-- Knob = MOTR's smooth vertical mouse wheel (`INPUT_REL_WHEEL` via the input
-  subsystem and an `zmk,input-listener`).
+## Architecture summary
+One physical MA730 encoder serves several ZMK subsystems. The driver
+(`drivers/sensor/ma730/ma730_input.c`) is the world-selector: on every poll
+(~8 ms) it reads `zmk_keymap_highest_layer_active()` and routes rotation into
+the world named by that layer in the devicetree `layer-modes` table. MOTR's
+absolute-angle maths (wrapped delta + reversal clearing) is preserved
+untouched; the accumulator is reset on every layer change so a turn crossing a
+mode boundary cannot leak a phantom tick.
 
-## Stage 2 — layer-aware dual-mode knob
+## Stage 3 layer map (current)
 
-### Where the layer awareness lives
-The MA730 driver (`drivers/sensor/ma730/ma730_input.c`) is the world-selector.
-On every poll (~8 ms) it reads `zmk_keymap_highest_layer_active()` and looks
-the index up in an in-driver mode table:
+| Layer | Name       | Mode (DT)            | Knob output                      | RGB colour      |
+|------:|------------|----------------------|----------------------------------|-----------------|
+| 0     | default    | `MA730_MODE_INACTIVE`| nothing (resting state)          | White           |
+| 1     | brightness | `MA730_MODE_KEY`     | F13 (CW) / F14 (CCW)             | Amber/Yellow    |
+| 2     | arrows     | `MA730_MODE_KEY`     | Right (CW) / Left (CCW)         | Green           |
+| 3     | scroll-h   | `MA730_MODE_SCROLL_H`| smooth horizontal wheel (CW=right)| Cyan           |
+| 4     | scroll-v   | `MA730_MODE_SCROLL_V`| smooth vertical wheel (CW=down)  | Pastel Magenta  |
+| 5     | reserved   | `MA730_MODE_KEY`     | (pre-loaded Vol Up/Down, dormant)| Orange          |
+| 6     | reserved   | `MA730_MODE_INACTIVE`| nothing                          | Blue            |
+| 7     | reserved   | `MA730_MODE_INACTIVE`| nothing                          | Teal            |
+| 8     | reserved   | `MA730_MODE_INACTIVE`| nothing                          | Purple          |
+| 9     | selector   | `MA730_MODE_SELECT`  | cycles base layers (held)        | (never shown)   |
 
-| Layer | Name       | World    | Knob output                          |
-|------:|------------|----------|--------------------------------------|
-| 0     | default    | inactive | nothing                              |
-| 1     | brightness | keyboard | tap **F13** (CW) / **F14** (CCW)     |
-| 2     | volume     | keyboard | tap **Vol Up** (CW) / **Vol Dn** (CCW) |
-| 3     | scroll-v   | pointing | smooth `INPUT_REL_WHEEL` (vertical)  |
-| 4     | scroll-h   | pointing | smooth `INPUT_REL_HWHEEL` (horizontal) |
+Buttons on every active layer (fall through via `&trans`): LEFT = Copy
+`LC(C)`, MIDDLE = Select-All `LC(A)` / hold = selector, RIGHT = Paste `LC(V)`.
 
-The vertical/horizontal choice is made **driver-side** (the brief allows this
-or layer-gated listeners); doing it in the driver keeps a single input-listener
-and one scaler for both axes.
+### Exact RGB colours (HSB: hue 0-360, sat 0-100, brightness 0-100)
+Set in `src/rgb_indicator.c` `layer_colors[]`:
 
-### Keyboard world — how a turn becomes a key tap
-ZMK's normal sensor path uses `sensor-bindings` (e.g. `&inc_dec_kp`). We instead
-raise keycode events directly from the driver with
-`raise_zmk_keycode_state_changed_from_encoded(<encoded keycode>, pressed, ts)`,
-where the encoded keycode is the same value `&kp` uses (`F13`, `C_VOL_UP`, …).
+| Layer | Colour          | H   | S   | B  |
+|------:|-----------------|----:|----:|---:|
+| 0     | White           | 0   | 0   | 80 |
+| 1     | Amber/Yellow    | 40  | 100 | 80 |
+| 2     | Green           | 120 | 100 | 80 |
+| 3     | Cyan            | 180 | 100 | 80 |
+| 4     | Pastel Magenta  | 320 | 50  | 90 |
+| 5     | Orange (resv)   | 25  | 100 | 80 |
+| 6     | Blue (resv)     | 225 | 100 | 80 |
+| 7     | Teal (resv)     | 165 | 100 | 70 |
+| 8     | Purple (resv)   | 280 | 100 | 80 |
 
-**Why this deviates from the brief's `&inc_dec_kp` suggestion:** making the
-MA730 a *dual* Zephyr-sensor + input device in one driver is significantly more
-code and version-sensitive. Raising keycode events is self-contained, produces
-HID output identical to `&kp`, and keeps the per-layer routing in one place.
-The key identities are easy to change in the driver's `ma730_layer_modes`
-table; this can be migrated to `sensor-bindings` later if desired.
+Pure red (H 0, S 100) is reserved for future alert use; blue (225) is kept
+clear of cyan (180).
 
-Tap timing: a press and its release are queued in a small FIFO and drained
-**one entry per poll**, so each transition lands on a separate HID report and
-the host never coalesces a tap into nothing. All queue access happens on the
-single poll execution context, so it needs no locking.
+## The selector (Stage 3, replaces the Stage 2 combo harness)
+- MIDDLE is a hold-tap (`&lt_sel`, `zmk,behavior-hold-tap`,
+  `flavor = "hold-preferred"`, `tapping-term-ms = <200>`): **tap** = Select-All,
+  **hold** = momentary selector layer (9).
+- While the selector layer is held it is the highest active layer, so the
+  driver is in `MA730_MODE_SELECT`. Turning advances the candidate **base**
+  layer (`zmk_keymap_layer_activate`/`deactivate` on layers 1..count-1, leaving
+  the default layer 0 always active). The selector layer itself stays active
+  throughout, so the highest layer never changes mid-selection.
+- **Releasing MIDDLE** drops the momentary selector layer, leaving exactly the
+  candidate base layer active — that is the landed layer.
+- Selector resolution is **separate** from scroll sensitivity and never uses
+  `zip_scroll_scaler`. `select-counts-per-step = <8192>` ≈ 8 steps/rev: one
+  deliberate layer per nudge. CW advances to the next layer (wraps).
+- Selector-layer buttons: LEFT = `&bt BT_CLR`, MIDDLE = `&trans` (the hold),
+  RIGHT = `&rgb_ug RGB_TOG`.
 
-### Pointing world — smoothness
-The MA730 is a 16-bit absolute encoder (65536 counts/rev). The driver meters
-counts into fine wheel units at `scroll-counts-per-unit` (default 64 →
-~1024 units/rev), tracking the remainder so no motion is lost. The board's
-`zip_scroll_scaler` then divides by the listener divisor (default **16**,
-in `rotr_nrf52840_zmk.dts`) with `track-remainders`, giving ~64 notches/rev.
-**Tune feel by changing that 16** (higher = slower).
+## RGB behaviour (`src/rgb_indicator.c`)
+A `zmk_layer_state_changed` listener (work-queued, so no locking) shows the
+**current layer** colour, where "current layer" = highest active layer
+*excluding* the selector layer — so during selection the underglow previews
+the candidate landing layer.
 
-Velocity-based acceleration is applied in the driver: the per-poll speed is
-multiplied by `scroll-accel-gain` (default 6) and added to a 256-based unity
-factor, clamped at `scroll-accel-max` (default 1024 = 4×). Acceleration scales
-the *magnitude*, not the event rate, so the HID report rate stays bounded by
-the poll interval. Set `scroll-accel-gain = <0>` for linear scrolling.
+- **Underglow ON:** layer colour shown persistently, updates on every change.
+- **Underglow OFF** (toggled with HOLD MIDDLE + TAP RIGHT, persisted by ZMK):
+  stays off, except a layer change briefly illuminates the new colour and
+  fades to off — a momentary indicator. Duration is `ROTR_RGB_FLASH_MS`
+  (default 600 ms) over `ROTR_RGB_FADE_STEPS` (8) steps.
+- The flash uses ZMK's `on()`/`set_hsb()`/`off()`, which persist via a
+  *debounced* save, so a brief flash nets out to the user's real preference.
+  The canonical full-brightness colour is restored before the final `off()`
+  so a later toggle-on shows the correct colour.
+- Boot: a one-shot work 1.5 s after start sets the current layer colour
+  (white at boot via `CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0`).
 
-Direction defaults: CW scrolls **down** and pans **right**. Flip with
-`invert-scroll` / `invert-hscroll` on the `ma730` node.
+Known edge (flagged for hardware test): pressing RGB_TOG *during* the brief
+off-state flash may toggle the wrong way, since the underglow is momentarily on.
+The window is ~600 ms.
 
-### Critical edge case — accumulator reset
-On any layer change (hence any mode change) the driver discards the straddling
-delta, zeroes the accumulator and re-seeds the last angle, so a turn crossing a
-keyboard↔scroll boundary cannot leak a phantom tick. This builds on MOTR's
-existing reversal-clearing logic, which is preserved untouched.
+## Activating a reserved layer (5–8) — devicetree only, no C change
+In `boards/polarityworks/rotr/rotr_nrf52840_zmk.dts`, `ma730` node:
+1. Set that layer's entry in `layer-modes` to the desired `MA730_MODE_*`.
+2. If it's a `MA730_MODE_KEY` layer, set its `layer-keycodes-cw` and
+   `layer-keycodes-ccw` entries (encoded keycodes, e.g. `C_VOL_UP`).
+3. Raise `select-layer-count` so the selector cycles up to it (e.g. `<6>` to
+   reach layer 5). This is **the single value** that gates reserved layers.
+4. (Optional) its RGB colour is already pre-assigned in `layer_colors[]`.
 
-### Temporary layer switching (Stage 2 testing only)
-The real hold-middle-turn selector is Stage 3. For now, combos toggle layers
-while single presses stay Copy/Select-All/Paste:
+Layer 5 is pre-loaded as Volume (Vol Up CW / Vol Down CCW), so enabling it is
+just step 3: `select-layer-count = <6>`.
 
-- LEFT + MIDDLE → toggle layer 1 (brightness)
-- MIDDLE + RIGHT → toggle layer 2 (volume)
-- LEFT + RIGHT → toggle layer 3 (scroll-v)
-- LEFT + MIDDLE + RIGHT → toggle layer 4 (scroll-h)
-
-Layer 0 is the state with nothing toggled. Toggle one layer on, test, toggle it
-off before moving on.
-
-### Tunables summary
+## Tunables summary
 | Setting | Location | Default | Effect |
 |---------|----------|--------:|--------|
-| scroll divisor | `ma730-listener` `zip_scroll_scaler 1 N` (DTS) | 16 | main scroll speed; higher = slower |
+| scroll divisor | `ma730-listener` `zip_scroll_scaler 1 N` (DTS) | 32 | scroll speed; higher = slower (both axes) |
+| `select-counts-per-step` | `ma730` node (DTS) | 8192 | selector coarseness (~8/rev) |
+| `select-layer-count` | `ma730` node (DTS) | 5 | layers the selector cycles |
+| `tapping-term-ms` | `lt_sel` behaviour (keymap) | 200 | hold-vs-tap threshold for the selector |
 | `scroll-counts-per-unit` | `ma730` node (DTS) | 64 | fine resolution before scaler |
-| `scroll-accel-gain` | `ma730` node (DTS) | 6 | acceleration strength; 0 = off |
-| `scroll-accel-max` | `ma730` node (DTS) | 1024 | acceleration cap (256 = 1×) |
-| `key-counts-per-detent` | `ma730` node (DTS) | 2731 | detents/rev for brightness/volume |
+| `scroll-accel-gain` / `-max` | `ma730` node (DTS) | 6 / 1024 | velocity accel; gain 0 = off |
+| `key-counts-per-detent` | `ma730` node (DTS) | 2731 | detents/rev for KEY layers |
 | `invert-scroll` / `invert-hscroll` | `ma730` node (DTS) | off | flip wheel direction |
+| `ROTR_RGB_FLASH_MS` / `_FADE_STEPS` | `src/rgb_indicator.c` | 600 / 8 | off-state flash duration |
+
+## ZMK-internal dependency (pinned in `config/west.yml`)
+This firmware calls ZMK application APIs that are not a stable public ABI:
+- `zmk_keymap_highest_layer_active()`, `zmk_keymap_layer_active()`,
+  `zmk_keymap_layer_activate()`, `zmk_keymap_layer_deactivate()`
+  (`zmk/keymap.h`)
+- `raise_zmk_keycode_state_changed_from_encoded()`
+  (`zmk/events/keycode_state_changed.h`) — used for the keyboard-world taps
+  (a deliberate, documented deviation from `&inc_dec_kp` sensor-bindings;
+  far less code than a dual sensor+input device, identical HID output).
+- `zmk_rgb_underglow_*()` (`zmk/rgb_underglow.h`)
+- ZMK assumption: `CONFIG_ZMK_KEYMAP_LAYER_REORDERING` is **off**, so layer
+  index == layer id (the driver uses the index from
+  `zmk_keymap_highest_layer_active()` directly as a layer id).
+
+Because these are internal, **ZMK is pinned to a specific revision** in
+`config/west.yml`. Bumping that pin may require adjusting these calls. The
+build also adds ZMK's private `app/include` and the board directory to the
+out-of-tree library include paths (see the two `CMakeLists.txt`).
