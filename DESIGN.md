@@ -67,33 +67,67 @@ clear of cyan (180).
 - Selector-layer buttons: LEFT = `&bt BT_CLR`, MIDDLE = `&trans` (the hold),
   RIGHT = `&rgb_ug RGB_TOG`.
 
-## RGB behaviour (`src/rgb_indicator.c`)
-A `zmk_layer_state_changed` listener (work-queued, so no locking) shows the
-**current layer** colour, where "current layer" = highest active layer
-*excluding* the selector layer — so while the selector is held the underglow
-previews the candidate landing layer, updating as the knob turns.
+## RGB behaviour (`src/rgb_indicator.c`) — ported from the original ROTR
+This reproduces the stock Polarity Works ROTR underglow behaviour. The
+desired model:
 
-The model is a clean **toggle** (toggled with HOLD MIDDLE + TAP RIGHT,
-persisted by ZMK). The *only* difference between the two states is the
-resting state; the selector illumination is identical in both:
+- **Toggle ON** (HOLD MIDDLE + TAP RIGHT = `RGB_TOG`, persisted): the active
+  layer's colour is lit **perpetually** — at rest, while selecting, and at
+  idle.
+- **Toggle OFF:** **dark at rest**; lit **only while MIDDLE is held**
+  (selection mode), showing the candidate colour SOLID and updating as the
+  knob turns, then **dark the instant MIDDLE is released** and the layer is
+  landed.
 
-- **Underglow ON:** the current layer's colour is lit **continuously** — at
-  rest and at idle (`CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n` stops ZMK
-  switching the LEDs off after the idle timeout). The module keeps ZMK's
-  colour current via `set_hsb` and ZMK's tick renders it solid; nothing is
-  drawn directly.
-- **Underglow OFF:** **dark at rest.** The only time it lights while off is
-  while MIDDLE is **held** (selector active): the candidate layer's colour is
-  shown **SOLID for the entire hold**, updating as the knob turns, and goes
-  **dark on release**. No flashing.
-- The off-state selector illumination is written **straight to the strip**
-  with `led_strip_update_rgb` (the module converts HSB→RGB itself). It never
-  calls ZMK's `on()`/`off()`, so it does not flip the persisted on/off state —
-  this removes the earlier mid-flash toggle edge case (see below). ZMK's tick
-  is stopped while off, so the direct writes never contend with it.
-- Boot: a one-shot work 1.5 s after start brings up the ext-power rail and
-  settles the current layer colour (white at boot via
-  `CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0`).
+### What the original did (refil/zmk @ `rotrlayer`, `app/boards/arm/rotr2`)
+The per-layer logic lived in that fork's **modified `app/src/rgb_underglow.c`**,
+not in the board dir:
+
+- A custom effect `UNDERGLOW_EFFECT_DEFAULTLAYER` (selected via
+  `EFF_START=4`) keyed the strip colour to **`zmk_keymap_layer_default()`** —
+  the persistent base layer chosen by the shift selector, so the landed layer
+  stays shown after release.
+- Crucially, the fork **commented out the `k_timer_start`/`k_timer_stop` in
+  `on()`/`off()`** and started the tick unconditionally at init, so the **50 ms
+  tick runs forever** and is the sole writer of the strip every frame. On/off
+  is just a `state.on` flag the tick reads (`if (state.on)` fills colour, else
+  leaves it dark). This always-running, self-owned render is why it never
+  misses a transition.
+- An optional `CONFIG_ZMK_RGB_UNDERGLOW_LAYER_ON` block force-turned the
+  underglow on while the `"shift"` layer was the highest active and off
+  otherwise — i.e. the "lit only while selecting" half of the model.
+
+### How the port maps onto current (pinned) ZMK
+Current upstream ZMK differs: `on()`/`off()` **do** start/stop the tick, the
+tick early-returns `if (!state.on)`, `set_hsb` is cheap (no NVS write), and
+idle auto-off is fully `#if`-compiled by `AUTO_OFF_IDLE`. We can't edit ZMK
+core (out-of-tree, pinned), so we recreate the original's *always-running tick*
+in `src/rgb_indicator.c` with our **own 50 ms `k_timer`** (`ROTR_TICK_MS`),
+plus the `zmk_layer_state_changed` listener for instant response. Each frame
+`render()`:
+
+- **"Current layer"** = highest active layer *excluding* the selector layer —
+  our analogue of the original's `layer_default` (the candidate while held,
+  the landed layer after release).
+- **Toggle ON:** ZMK's own tick is running, so we just keep its colour current
+  via `set_hsb` and let ZMK render it solid — a single writer. Perpetual at
+  idle because `CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n` compiles out ZMK's
+  idle auto-off.
+- **Toggle OFF:** ZMK's tick is stopped, so we are the sole writer. We fill
+  the candidate colour SOLID while the selector is held and black otherwise —
+  written **straight to the strip** (`led_strip_update_rgb`), re-asserted every
+  frame, never touching ZMK's on/off state.
+- `BRT_MIN/MAX` are pinned to `0/100` (identity scaling) so the ON render
+  (ZMK) and the OFF-held fill (ours) are the **same colour**.
+
+This fixes the two regressions of the previous event-only build: OFF no longer
+goes blind during selection (the tick re-asserts the candidate continuously),
+and ON no longer goes dark on release (`set_hsb` is refreshed every frame and
+ZMK renders it perpetually).
+
+- Boot: a one-shot work 1.5 s after start brings up the ext-power rail, does
+  one `render()`, then starts the periodic tick. Boot colour is white via
+  `CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0`.
 
 ### Root cause of the dead-underglow bug (and the fix)
 The LED strip is powered through the **gpio1.11 ext-power rail**. With

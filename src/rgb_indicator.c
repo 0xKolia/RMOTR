@@ -18,27 +18,40 @@
  * EXT_POWER is removed from the board defconfig) and have this module -- the
  * owner of the RGB subsystem -- bring the rail up once at startup and keep
  * it powered. The RGB on/off toggle then only gates colour/animation; it
- * does NOT cut the rail ("just go dark"). This is what avoids the mid-flash
- * toggle edge case: the off-state flash writes the strip directly and never
- * touches ZMK's on/off state, so RGB_TOG always does the expected thing.
+ * does NOT cut the rail ("just go dark"). Our off-state writes go straight to
+ * the strip and never touch ZMK's on/off state, so RGB_TOG always does the
+ * expected thing.
  *
- * Behaviour (toggle model):
- *   - "Current layer" = highest active layer EXCLUDING the held selector, so
- *     while the selector is held the colour previews the candidate landing
- *     layer, updating as the knob turns.
- *   - Underglow ON : the current layer's colour is lit continuously, at rest
- *     and at idle (CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n keeps it on),
- *     rendered by ZMK's tick from the colour we keep current via set_hsb.
- *   - Underglow OFF: dark at rest. The ONLY time it lights while off is while
- *     MIDDLE is held (selector active): the candidate layer's colour shows
- *     SOLID for the whole hold, updating as the knob turns, and goes dark on
- *     release. No flashing.
- *   - The held-selector illumination is the SAME steady colour in both toggle
- *     states; the only difference is the resting state (ON = lit, OFF = dark).
+ * Behaviour (ported from the original Polarity Works ROTR firmware, refil/zmk
+ * @rotrlayer, board app/boards/arm/rotr2). The original's robustness comes
+ * from a single always-running 50 ms underglow tick that unconditionally
+ * owns the strip and re-renders every frame from the live state -- it is NOT
+ * event-driven, so it cannot miss a transition. We replicate that here with
+ * our own periodic tick (DESIGN.md documents the mapping). "Current layer" =
+ * highest active layer EXCLUDING the held selector, so while the selector is
+ * held the colour is the candidate landing layer, updating as the knob turns
+ * -- our analogue of the original keying colour to the persistent default
+ * layer (the landed layer persists after release).
  *
- * All work runs on the system workqueue. Direct strip writes only happen
- * while underglow is off (ZMK's tick is stopped then), so the LED device is
+ *   - Toggle ON  (RGB_TOG, persisted): the current layer's colour is lit
+ *     PERPETUALLY -- at rest, while selecting, and at idle
+ *     (CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n). When on, ZMK's own tick is
+ *     running and renders the colour solid; our tick just keeps that colour
+ *     current via set_hsb and does not draw, so there is a single writer.
+ *   - Toggle OFF (RGB_TOG, persisted): dark at rest. It lights ONLY while
+ *     MIDDLE is held (selector active): the candidate colour is shown SOLID
+ *     for the whole hold, updating as the knob turns, and goes dark the moment
+ *     MIDDLE is released and the layer is landed. When off, ZMK's tick is
+ *     stopped, so our tick is the sole writer and re-asserts the candidate
+ *     every frame -- this is what restores selection visibility.
+ *
+ * BRT_MIN/MAX default 0/100, so ZMK's solid render (toggle ON) and our direct
+ * fill (toggle OFF, held) produce the same colour. Our direct writes happen
+ * only while underglow is off (ZMK's tick stopped), so the LED device is
  * never driven from two contexts at once.
+ *
+ * Kept from the dead-underglow fix: the ext-power rail is decoupled from RGB
+ * on/off (CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=n) and brought up once at boot.
  */
 
 #include <zephyr/init.h>
@@ -92,7 +105,11 @@ static const struct device *const ext_power = NULL;
 
 static struct led_rgb		px[STRIP_NUM];
 
-static struct k_work		apply_work;
+/* Render cadence of our self-owned tick (matches the original's 50 ms). */
+#define ROTR_TICK_MS		50
+
+static struct k_work		render_work;
+static struct k_timer		render_timer;
 static struct k_work_delayable	boot_work;
 
 /* Integer HSB(0-360,0-100,0-100) -> led_rgb(0-255). */
@@ -157,31 +174,30 @@ selector_held(void)
 }
 
 /*
- * Show the current (or, while the selector is held, candidate) layer colour
- * according to the toggle state:
- *   - ON : keep ZMK's colour current; its tick renders it solid and lit at
- *     rest, so there is nothing to draw directly.
- *   - OFF: drive the strip directly -- the candidate colour SOLID while the
- *     selector is held, dark otherwise. Same steady illumination as ON; only
- *     the resting state differs (ON = lit, OFF = dark).
+ * One render pass -- the body of the always-running tick (also run from the
+ * layer-change listener for instant response). Re-rendered every frame from
+ * live state, exactly like the original rotr2 tick.
  *
- * Direct writes happen only while underglow is off, when ZMK's tick is
- * stopped and cannot fight us. set_hsb never changes the on/off state, so it
- * cannot cause the toggle edge case.
+ *   - Toggle ON : keep ZMK's stored colour current; ZMK's own tick renders it
+ *     solid and continuously, so we do NOT draw -- one writer.
+ *   - Toggle OFF: ZMK's tick is stopped, so we are the sole writer. Show the
+ *     candidate colour SOLID while the selector is held, dark otherwise; this
+ *     runs every frame so selection stays lit and lands dark on release.
  */
 static void
-apply_color(void)
+render(void)
 {
 	struct rotr_color	c = layer_colors[current_layer()];
 	bool			on = false;
 
 	zmk_rgb_underglow_get_state(&on);
 
+	/* Cheap in current ZMK (no NVS write); keeps the on-state colour live. */
 	zmk_rgb_underglow_set_hsb((struct zmk_led_hsb){ .h = c.h,
 	    .s = c.s, .b = c.b });
 
 	if (on) {
-		return;		/* ZMK's tick renders the lit colour */
+		return;		/* ZMK's tick owns the strip and renders it lit */
 	}
 
 	if (selector_held()) {
@@ -192,10 +208,17 @@ apply_color(void)
 }
 
 static void
-apply_work_handler(struct k_work *work)
+render_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
-	apply_color();
+	render();
+}
+
+static void
+render_timer_handler(struct k_timer *timer)
+{
+	ARG_UNUSED(timer);
+	k_work_submit(&render_work);
 }
 
 static void
@@ -216,15 +239,17 @@ boot_work_handler(struct k_work *work)
 		}
 	}
 
-	/* Settle the boot colour. */
-	apply_color();
+	/* Settle the boot colour, then start the always-running render tick. */
+	render();
+	k_timer_start(&render_timer, K_MSEC(ROTR_TICK_MS),
+	    K_MSEC(ROTR_TICK_MS));
 }
 
 static int
 rgb_indicator_listener(const zmk_event_t *eh)
 {
 	ARG_UNUSED(eh);
-	k_work_submit(&apply_work);
+	k_work_submit(&render_work);	/* instant response; the tick backs it up */
 	return ZMK_EV_EVENT_BUBBLE;
 }
 
@@ -234,7 +259,8 @@ ZMK_SUBSCRIPTION(rotr_rgb_indicator, zmk_layer_state_changed);
 static int
 rgb_indicator_init(void)
 {
-	k_work_init(&apply_work, apply_work_handler);
+	k_work_init(&render_work, render_work_handler);
+	k_timer_init(&render_timer, render_timer_handler, NULL);
 	k_work_init_delayable(&boot_work, boot_work_handler);
 
 	/* Run once underglow, ext-power and settings are all ready. */

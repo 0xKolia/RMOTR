@@ -42,6 +42,11 @@ CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=n
 
 CONFIG_ZMK_RGB_UNDERGLOW_ON_START=y
 CONFIG_ZMK_RGB_UNDERGLOW_EFF_START=0
+# Identity brightness scaling so ZMK's solid render (toggle ON) and our direct
+# fill (toggle OFF, selector held) produce the exact same colour. These are
+# also the ZMK defaults; set explicitly so the match can't drift.
+CONFIG_ZMK_RGB_UNDERGLOW_BRT_MIN=0
+CONFIG_ZMK_RGB_UNDERGLOW_BRT_MAX=100
 # Start white (layer 0 colour); the per-layer indicator takes over after boot.
 CONFIG_ZMK_RGB_UNDERGLOW_HUE_START=0
 CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0
