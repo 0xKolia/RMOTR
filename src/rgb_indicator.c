@@ -64,6 +64,9 @@
 #define STRIP_NODE		DT_CHOSEN(zmk_underglow)
 #define STRIP_NUM		DT_PROP(STRIP_NODE, chain_length)
 
+/* ZMK's upstream rgb_underglow.c effect enum: 0 = UNDERGLOW_EFFECT_SOLID. */
+#define ROTR_UNDERGLOW_EFFECT_SOLID	0
+
 struct rotr_color {
 	uint16_t	h;	/* 0-360 */
 	uint8_t		s;	/* 0-100 */
@@ -228,6 +231,14 @@ boot_work_handler(struct k_work *work)
 			(void)rc;	/* best effort; nothing else to do */
 		}
 	}
+
+	/*
+	 * RGB_TOG persists the whole ZMK underglow state, including effect.
+	 * If an animated effect was ever saved, ZMK's own tick can still write
+	 * breathing/spectrum frames while toggle is ON. Force solid once after
+	 * settings load so any ZMK writes match our static direct-rendered fill.
+	 */
+	zmk_rgb_underglow_select_effect(ROTR_UNDERGLOW_EFFECT_SOLID);
 
 	/* Settle the boot colour, then start the always-running render tick. */
 	render();

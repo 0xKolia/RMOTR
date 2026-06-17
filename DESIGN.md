@@ -121,6 +121,9 @@ used as the persisted user toggle, not as the visual writer. Each frame
   on/off state.
 - `BRT_MIN/MAX` are pinned to `0/100` (identity scaling) so direct-rendered
   colours match ZMK's HSB scale.
+- Boot forces ZMK's persisted underglow effect back to SOLID once after
+  settings load; otherwise an old saved breathing/spectrum effect can keep
+  animating while toggle is ON and make the static indicator appear to flash.
 
 This fixes the two regressions of the previous event-only/ZMK-rendered builds:
 OFF no longer goes blind during selection (the tick re-asserts the candidate
