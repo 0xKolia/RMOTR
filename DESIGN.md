@@ -103,27 +103,29 @@ tick early-returns `if (!state.on)`, `set_hsb` is cheap (no NVS write), and
 idle auto-off is fully `#if`-compiled by `AUTO_OFF_IDLE`. We can't edit ZMK
 core (out-of-tree, pinned), so we recreate the original's *always-running tick*
 in `src/rgb_indicator.c` with our **own 50 ms `k_timer`** (`ROTR_TICK_MS`),
-plus the `zmk_layer_state_changed` listener for instant response. Each frame
+plus the `zmk_layer_state_changed` listener for instant response. This module
+now direct-renders the strip in both visible states; ZMK's underglow state is
+used as the persisted user toggle, not as the visual writer. Each frame
 `render()`:
 
 - **"Current layer"** = highest active layer *excluding* the selector layer —
   our analogue of the original's `layer_default` (the candidate while held,
   the landed layer after release).
-- **Toggle ON:** ZMK's own tick is running, so we just keep its colour current
-  via `set_hsb` and let ZMK render it solid — a single writer. Perpetual at
-  idle because `CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n` compiles out ZMK's
-  idle auto-off.
-- **Toggle OFF:** ZMK's tick is stopped, so we are the sole writer. We fill
-  the candidate colour SOLID while the selector is held and black otherwise —
-  written **straight to the strip** (`led_strip_update_rgb`), re-asserted every
-  frame, never touching ZMK's on/off state.
-- `BRT_MIN/MAX` are pinned to `0/100` (identity scaling) so the ON render
-  (ZMK) and the OFF-held fill (ours) are the **same colour**.
+- **Toggle ON:** this module fills the current/candidate colour SOLID every frame
+  including at rest and after selector release. `set_hsb` is still updated so
+  ZMK's persisted colour remains in sync, but visible output no longer relies
+  on ZMK's own underglow timer.
+- **Toggle OFF:** we fill the candidate colour SOLID while the selector is held
+  and black otherwise, written **straight to the strip**
+  (`led_strip_update_rgb`) and re-asserted every frame, never touching ZMK's
+  on/off state.
+- `BRT_MIN/MAX` are pinned to `0/100` (identity scaling) so direct-rendered
+  colours match ZMK's HSB scale.
 
-This fixes the two regressions of the previous event-only build: OFF no longer
-goes blind during selection (the tick re-asserts the candidate continuously),
-and ON no longer goes dark on release (`set_hsb` is refreshed every frame and
-ZMK renders it perpetually).
+This fixes the two regressions of the previous event-only/ZMK-rendered builds:
+OFF no longer goes blind during selection (the tick re-asserts the candidate
+continuously), and ON no longer goes dark on release because this module keeps
+painting the landed layer colour directly.
 
 - Boot: a one-shot work 1.5 s after start brings up the ext-power rail, does
   one `render()`, then starts the periodic tick. Boot colour is white via

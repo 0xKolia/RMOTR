@@ -34,24 +34,18 @@
  * layer (the landed layer persists after release).
  *
  *   - Toggle ON  (RGB_TOG, persisted): the current layer's colour is lit
- *     PERPETUALLY -- at rest, while selecting, and at idle
- *     (CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n). When on, ZMK's own tick is
- *     running and renders the colour solid; our tick just keeps that colour
- *     current via set_hsb and does not draw, so there is a single writer.
+ *     PERPETUALLY -- at rest, while selecting, and at idle.
  *   - Toggle OFF (RGB_TOG, persisted): dark at rest. It lights ONLY while
  *     MIDDLE is held (selector active): the candidate colour is shown SOLID
  *     for the whole hold, updating as the knob turns, and goes dark the moment
- *     MIDDLE is released and the layer is landed. When off, ZMK's tick is
- *     stopped, so our tick is the sole writer and re-asserts the candidate
- *     every frame -- this is what restores selection visibility.
+ *     MIDDLE is released and the layer is landed.
  *
- * BRT_MIN/MAX default 0/100, so ZMK's solid render (toggle ON) and our direct
- * fill (toggle OFF, held) produce the same colour. Our direct writes happen
- * only while underglow is off (ZMK's tick stopped), so the LED device is
- * never driven from two contexts at once.
- *
- * Kept from the dead-underglow fix: the ext-power rail is decoupled from RGB
- * on/off (CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=n) and brought up once at boot.
+ * We direct-render both cases from this module's always-running tick. ZMK's
+ * RGB state remains the persisted user toggle, but visual output is owned here
+ * so the strip cannot go dark just because ZMK's own underglow timer missed a
+ * layer/hold transition. Kept from the dead-underglow fix: the ext-power rail
+ * is decoupled from RGB on/off (CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=n) and
+ * brought up once at boot.
  */
 
 #include <zephyr/init.h>
@@ -178,29 +172,25 @@ selector_held(void)
  * layer-change listener for instant response). Re-rendered every frame from
  * live state, exactly like the original rotr2 tick.
  *
- *   - Toggle ON : keep ZMK's stored colour current; ZMK's own tick renders it
- *     solid and continuously, so we do NOT draw -- one writer.
- *   - Toggle OFF: ZMK's tick is stopped, so we are the sole writer. Show the
- *     candidate colour SOLID while the selector is held, dark otherwise; this
- *     runs every frame so selection stays lit and lands dark on release.
+ *   - Toggle ON : show the current/candidate layer colour continuously.
+ *   - Toggle OFF: show the candidate colour only while the selector is held,
+ *     dark otherwise; this runs every frame so selection stays lit and lands
+ *     dark on release.
  */
 static void
 render(void)
 {
 	struct rotr_color	c = layer_colors[current_layer()];
 	bool			on = false;
+	bool			held = selector_held();
 
 	zmk_rgb_underglow_get_state(&on);
 
-	/* Cheap in current ZMK (no NVS write); keeps the on-state colour live. */
+	/* Cheap in current ZMK (no NVS write); keeps persisted HSB in sync. */
 	zmk_rgb_underglow_set_hsb((struct zmk_led_hsb){ .h = c.h,
 	    .s = c.s, .b = c.b });
 
-	if (on) {
-		return;		/* ZMK's tick owns the strip and renders it lit */
-	}
-
-	if (selector_held()) {
+	if (on || held) {
 		strip_fill(hsb_to_rgb(c.h, c.s, c.b));
 	} else {
 		strip_fill((struct led_rgb){ .r = 0, .g = 0, .b = 0 });
