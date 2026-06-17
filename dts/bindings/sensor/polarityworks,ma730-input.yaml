@@ -63,6 +63,22 @@ properties:
       Minimum raw-count delta to confirm a direction change. Sub-threshold
       opposing deltas are discarded so detent jitter cannot flip direction.
 
+  jitter-threshold:
+    type: int
+    default: 4
+    description: |
+      Per-poll raw-count noise floor. Deltas with absolute value less than
+      or equal to this are treated as stationary sensor jitter and do not
+      accumulate toward key, scroll, or selector output.
+
+  idle-reset-ms:
+    type: int
+    default: 250
+    description: |
+      Clear any partial accumulated movement after this many milliseconds
+      without meaningful movement. Prevents an almost-detent from sitting
+      around until later sensor noise turns it into a ghost input.
+
   scroll-counts-per-unit:
     type: int
     default: 64

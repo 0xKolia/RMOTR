@@ -14,6 +14,13 @@ absolute-angle maths (wrapped delta + reversal clearing) is preserved
 untouched; the accumulator is reset on every layer change so a turn crossing a
 mode boundary cannot leak a phantom tick.
 
+Stationary ghost-input suppression is deliberately separate from layer
+thresholds: tiny raw deltas at or below `jitter-threshold` are ignored, and
+`idle-reset-ms` clears any partial movement after the knob has been still for a
+short time. Without this, slow same-direction MA730 drift or an almost-detent
+left in the accumulator can eventually cross a key/scroll threshold minutes
+later.
+
 ## Stage 3 layer map (current)
 
 | Layer | Name       | Mode (DT)            | Knob output                      | RGB colour      |
@@ -185,6 +192,8 @@ just step 3: `select-layer-count = <6>`.
 | `scroll-counts-per-unit` | `ma730` node (DTS) | 64 | fine resolution before scaler |
 | `scroll-accel-gain` / `-max` | `ma730` node (DTS) | 6 / 1024 | velocity accel; gain 0 = off |
 | `key-counts-per-detent` | `ma730` node (DTS) | 2731 | detents/rev for KEY layers |
+| `jitter-threshold` | `ma730` node (DTS) | 4 | per-poll raw-count noise floor; higher = more ghost resistant, less ultra-slow sensitivity |
+| `idle-reset-ms` | `ma730` node (DTS) | 250 | clears stale partial movement after stillness |
 | `invert-scroll` / `invert-hscroll` | `ma730` node (DTS) | off | flip wheel direction |
 | `CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE` | board defconfig | n | must stay `n` for perpetual-on at idle |
 

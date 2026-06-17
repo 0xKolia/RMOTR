@@ -85,6 +85,8 @@ BUILD_ASSERT(ARRAY_SIZE(ma730_ccw_key) == ARRAY_SIZE(ma730_layer_mode),
 struct ma730_config {
 	struct spi_dt_spec	 spi;
 	int			 reversal_threshold;
+	int			 jitter_threshold;
+	int			 idle_reset_ms;
 	int			 scroll_counts_per_unit;
 	int			 key_counts_per_detent;
 	int			 scroll_accel_gain;
@@ -104,6 +106,7 @@ struct ma730_data {
 	const struct device	*dev;
 	uint16_t		 last_angle;
 	int			 accumulated_counts;
+	int64_t			 last_motion_ms;
 	uint8_t			 last_layer;
 	uint8_t			 select_index;	/* base layer chosen in selector */
 
@@ -417,7 +420,12 @@ ma730_poll(const struct device *dev)
 	delta = ma730_compute_delta(data->last_angle, raw);
 	data->last_angle = raw;
 
-	if (delta == 0) {
+	if (abs(delta) <= cfg->jitter_threshold) {
+		if (data->accumulated_counts != 0 &&
+		    k_uptime_get() - data->last_motion_ms >=
+		    cfg->idle_reset_ms) {
+			data->accumulated_counts = 0;
+		}
 		return;
 	}
 
@@ -434,6 +442,7 @@ ma730_poll(const struct device *dev)
 		data->accumulated_counts = 0;
 	}
 
+	data->last_motion_ms = k_uptime_get();
 	data->accumulated_counts += delta;
 
 	switch (mode) {
@@ -514,6 +523,7 @@ ma730_init(const struct device *dev)
 	data->dev = dev;
 	data->last_layer = 0;
 	data->accumulated_counts = 0;
+	data->last_motion_ms = k_uptime_get();
 	data->select_index = 0;
 	data->key_head = 0;
 	data->key_count = 0;
@@ -532,6 +542,14 @@ ma730_init(const struct device *dev)
 	}
 	if (cfg->reversal_threshold <= 0) {
 		LOG_ERR("reversal-threshold must be >= 1");
+		return -EINVAL;
+	}
+	if (cfg->jitter_threshold < 0) {
+		LOG_ERR("jitter-threshold must be >= 0");
+		return -EINVAL;
+	}
+	if (cfg->idle_reset_ms < 0) {
+		LOG_ERR("idle-reset-ms must be >= 0");
 		return -EINVAL;
 	}
 	if (!spi_is_ready_dt(&cfg->spi)) {
@@ -578,6 +596,8 @@ ma730_init(const struct device *dev)
 				        SPI_MODE_CPOL |			\
 				        SPI_MODE_CPHA, 0),		\
 		.reversal_threshold = DT_INST_PROP(n, reversal_threshold),\
+		.jitter_threshold   = DT_INST_PROP(n, jitter_threshold),	\
+		.idle_reset_ms      = DT_INST_PROP(n, idle_reset_ms),	\
 		.scroll_counts_per_unit =				\
 		    DT_INST_PROP(n, scroll_counts_per_unit),		\
 		.key_counts_per_detent =				\

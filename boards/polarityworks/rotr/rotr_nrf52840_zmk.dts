@@ -93,6 +93,13 @@ zephyr_udc0: &usbd {
 		reg = <0>;
 		spi-max-frequency = <DT_FREQ_M(8)>;
 		reversal-threshold = <10>;
+		/*
+		 * Anti-ghosting: ignore tiny per-poll sensor jitter and clear
+		 * stale partial movement after a short rest so drift cannot
+		 * accumulate into a random key/scroll/selector tick.
+		 */
+		jitter-threshold = <4>;
+		idle-reset-ms = <250>;
 
 		/*
 		 * Per-layer knob mode table (MA730_MODE_* from rotr-ma730.h),
