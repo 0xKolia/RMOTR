@@ -33,7 +33,9 @@ CONFIG_ZMK_BLE=y
 # colour/animation; the rail stays powered.
 CONFIG_ZMK_EXT_POWER=y
 CONFIG_ZMK_RGB_UNDERGLOW=y
-CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=y
+# Keep the toggled-on colour lit perpetually, including at idle. AUTO_OFF_IDLE
+# would switch the LEDs off after the idle timeout and break "perpetually on".
+CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n
 # Must be explicit =n: ZMK's Kconfig.defaults forces this on by default, so
 # merely omitting it leaves the rail coupled to RGB on/off (the bug).
 CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=n

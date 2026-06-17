@@ -22,7 +22,7 @@ mode boundary cannot leak a phantom tick.
 | 1     | brightness | `MA730_MODE_KEY`     | F13 (CW) / F14 (CCW)             | Amber/Yellow    |
 | 2     | arrows     | `MA730_MODE_KEY`     | Right (CW) / Left (CCW)         | Green           |
 | 3     | scroll-h   | `MA730_MODE_SCROLL_H`| smooth horizontal wheel (CW=right)| Cyan           |
-| 4     | scroll-v   | `MA730_MODE_SCROLL_V`| smooth vertical wheel (CW=down)  | Pastel Magenta  |
+| 4     | scroll-v   | `MA730_MODE_SCROLL_V`| smooth vertical wheel (CW=down)  | Magenta         |
 | 5     | reserved   | `MA730_MODE_KEY`     | (pre-loaded Vol Up/Down, dormant)| Orange          |
 | 6     | reserved   | `MA730_MODE_INACTIVE`| nothing                          | Blue            |
 | 7     | reserved   | `MA730_MODE_INACTIVE`| nothing                          | Teal            |
@@ -41,7 +41,7 @@ Set in `src/rgb_indicator.c` `layer_colors[]`:
 | 1     | Amber/Yellow    | 40  | 100 | 80 |
 | 2     | Green           | 120 | 100 | 80 |
 | 3     | Cyan            | 180 | 100 | 80 |
-| 4     | Pastel Magenta  | 320 | 50  | 90 |
+| 4     | Magenta         | 320 | 100 | 80 |
 | 5     | Orange (resv)   | 25  | 100 | 80 |
 | 6     | Blue (resv)     | 225 | 100 | 80 |
 | 7     | Teal (resv)     | 165 | 100 | 70 |
@@ -70,23 +70,29 @@ clear of cyan (180).
 ## RGB behaviour (`src/rgb_indicator.c`)
 A `zmk_layer_state_changed` listener (work-queued, so no locking) shows the
 **current layer** colour, where "current layer" = highest active layer
-*excluding* the selector layer — so during selection the underglow previews
-the candidate landing layer.
+*excluding* the selector layer — so while the selector is held the underglow
+previews the candidate landing layer, updating as the knob turns.
 
-- **Underglow ON:** layer colour shown persistently (via ZMK `set_hsb`),
-  updates on every change.
-- **Underglow OFF** (toggled with HOLD MIDDLE + TAP RIGHT, persisted by ZMK):
-  stays dark, except a layer change briefly illuminates the new colour and
-  fades to off — a momentary indicator. Duration is `ROTR_RGB_FLASH_MS`
-  (default 600 ms) over `ROTR_RGB_FADE_STEPS` (8) steps.
-- The off-state flash is written **straight to the strip** with
-  `led_strip_update_rgb` (the module converts HSB→RGB itself). It never calls
-  ZMK's `on()`/`off()`, so it does not flip the persisted on/off state — this
-  is what removes the earlier mid-flash toggle edge case (see below). ZMK's
-  tick is stopped while off, so the direct writes never contend with it; if
-  the user toggles RGB on mid-flash, the fade detects it and bows out.
+The model is a clean **toggle** (toggled with HOLD MIDDLE + TAP RIGHT,
+persisted by ZMK). The *only* difference between the two states is the
+resting state; the selector illumination is identical in both:
+
+- **Underglow ON:** the current layer's colour is lit **continuously** — at
+  rest and at idle (`CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n` stops ZMK
+  switching the LEDs off after the idle timeout). The module keeps ZMK's
+  colour current via `set_hsb` and ZMK's tick renders it solid; nothing is
+  drawn directly.
+- **Underglow OFF:** **dark at rest.** The only time it lights while off is
+  while MIDDLE is **held** (selector active): the candidate layer's colour is
+  shown **SOLID for the entire hold**, updating as the knob turns, and goes
+  **dark on release**. No flashing.
+- The off-state selector illumination is written **straight to the strip**
+  with `led_strip_update_rgb` (the module converts HSB→RGB itself). It never
+  calls ZMK's `on()`/`off()`, so it does not flip the persisted on/off state —
+  this removes the earlier mid-flash toggle edge case (see below). ZMK's tick
+  is stopped while off, so the direct writes never contend with it.
 - Boot: a one-shot work 1.5 s after start brings up the ext-power rail and
-  sets the current layer colour (white at boot via
+  settles the current layer colour (white at boot via
   `CONFIG_ZMK_RGB_UNDERGLOW_SAT_START=0`).
 
 ### Root cause of the dead-underglow bug (and the fix)
@@ -111,12 +117,12 @@ load, and keeps it powered. RGB on/off now only gates colour/animation.
 ### RGB-off rail choice (per the build brief's question)
 On "off" the strip **just goes dark; the ext-power rail stays powered.** I
 chose this over cutting the rail because cutting it would (a) re-introduce the
-mid-flash toggle edge case and (b) add the rail's enable latency to every
-off-state flash. The cost is a few mA for the (unlit) strip rail while RGB is
-off — acceptable on a USB/BLE macropad, and it makes the off-state flash
-instant and glitch-free. The earlier mid-flash toggle edge case is now gone:
-the flash never changes ZMK's on/off state, so `RGB_TOG` always does the
-expected thing.
+mid-toggle edge case and (b) add the rail's enable latency to every off-state
+selector illumination. The cost is a few mA for the (unlit) strip rail while
+RGB is off — acceptable on a USB/BLE macropad, and it makes the off-state
+selector illumination instant and glitch-free. The earlier toggle edge case
+is gone: the direct writes never change ZMK's on/off state, so `RGB_TOG`
+always does the expected thing.
 
 ## Activating a reserved layer (5–8) — devicetree only, no C change
 In `boards/polarityworks/rotr/rotr_nrf52840_zmk.dts`, `ma730` node:
@@ -141,7 +147,7 @@ just step 3: `select-layer-count = <6>`.
 | `scroll-accel-gain` / `-max` | `ma730` node (DTS) | 6 / 1024 | velocity accel; gain 0 = off |
 | `key-counts-per-detent` | `ma730` node (DTS) | 2731 | detents/rev for KEY layers |
 | `invert-scroll` / `invert-hscroll` | `ma730` node (DTS) | off | flip wheel direction |
-| `ROTR_RGB_FLASH_MS` / `_FADE_STEPS` | `src/rgb_indicator.c` | 600 / 8 | off-state flash duration |
+| `CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE` | board defconfig | n | must stay `n` for perpetual-on at idle |
 
 ## ZMK-internal dependency (pinned in `config/west.yml`)
 This firmware calls ZMK application APIs that are not a stable public ABI:

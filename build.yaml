@@ -3,4 +3,4 @@
 
 include:
   - board: rotr/nrf52840/zmk
-    artifact-name: MOTR
+    artifact-name: ROTR

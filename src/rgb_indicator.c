@@ -22,18 +22,23 @@
  * toggle edge case: the off-state flash writes the strip directly and never
  * touches ZMK's on/off state, so RGB_TOG always does the expected thing.
  *
- * Behaviour:
- *   - Underglow ON : the active layer's colour shows persistently (via ZMK
- *     set_hsb) and updates on every layer change.
- *   - Underglow OFF: stays dark, except a layer change briefly illuminates
- *     the new colour and fades to off -- written straight to the strip, ZMK
- *     on/off state untouched.
+ * Behaviour (toggle model):
  *   - "Current layer" = highest active layer EXCLUDING the held selector, so
- *     selecting (MIDDLE held + turn) previews the candidate landing layer.
+ *     while the selector is held the colour previews the candidate landing
+ *     layer, updating as the knob turns.
+ *   - Underglow ON : the current layer's colour is lit continuously, at rest
+ *     and at idle (CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n keeps it on),
+ *     rendered by ZMK's tick from the colour we keep current via set_hsb.
+ *   - Underglow OFF: dark at rest. The ONLY time it lights while off is while
+ *     MIDDLE is held (selector active): the candidate layer's colour shows
+ *     SOLID for the whole hold, updating as the knob turns, and goes dark on
+ *     release. No flashing.
+ *   - The held-selector illumination is the SAME steady colour in both toggle
+ *     states; the only difference is the resting state (ON = lit, OFF = dark).
  *
  * All work runs on the system workqueue. Direct strip writes only happen
- * while underglow is off (its tick is stopped), so the LED device is never
- * driven from two contexts at once.
+ * while underglow is off (ZMK's tick is stopped then), so the LED device is
+ * never driven from two contexts at once.
  */
 
 #include <zephyr/init.h>
@@ -48,10 +53,6 @@
 #include <drivers/ext_power.h>
 
 #include "rotr-ma730.h"
-
-/* Off-state flash: total duration (ms) and number of fade steps. Tweakable. */
-#define ROTR_RGB_FLASH_MS	600
-#define ROTR_RGB_FADE_STEPS	8
 
 #define STRIP_NODE		DT_CHOSEN(zmk_underglow)
 #define STRIP_NUM		DT_PROP(STRIP_NODE, chain_length)
@@ -72,7 +73,7 @@ static const struct rotr_color layer_colors[ROTR_NUM_LAYERS] = {
 	[1] = {  40, 100,  80 },	/* amber / yellow  */
 	[2] = { 120, 100,  80 },	/* green           */
 	[3] = { 180, 100,  80 },	/* cyan            */
-	[4] = { 320,  50,  90 },	/* pastel magenta  */
+	[4] = { 320, 100,  80 },	/* magenta         */
 	[5] = {  25, 100,  80 },	/* orange (resv)   */
 	[6] = { 225, 100,  80 },	/* blue   (resv)   */
 	[7] = { 165, 100,  70 },	/* teal   (resv)   */
@@ -92,11 +93,7 @@ static const struct device *const ext_power = NULL;
 static struct led_rgb		px[STRIP_NUM];
 
 static struct k_work		apply_work;
-static struct k_work_delayable	fade_work;
 static struct k_work_delayable	boot_work;
-
-static int			fade_step;
-static struct rotr_color	fade_color;
 
 /* Integer HSB(0-360,0-100,0-100) -> led_rgb(0-255). */
 static struct led_rgb
@@ -152,67 +149,45 @@ strip_fill(struct led_rgb c)
 	(void)led_strip_update_rgb(strip, px, STRIP_NUM);
 }
 
+/* Is the momentary selector layer currently held? */
+static bool
+selector_held(void)
+{
+	return zmk_keymap_layer_active((zmk_keymap_layer_id_t)ROTR_SELECT_LAYER);
+}
+
 /*
- * Off-state flash, written straight to the strip (ZMK underglow is off, so
- * its tick is stopped and will not fight us). If the user toggles RGB on
- * mid-flash, ZMK's tick takes over and we bow out.
+ * Show the current (or, while the selector is held, candidate) layer colour
+ * according to the toggle state:
+ *   - ON : keep ZMK's colour current; its tick renders it solid and lit at
+ *     rest, so there is nothing to draw directly.
+ *   - OFF: drive the strip directly -- the candidate colour SOLID while the
+ *     selector is held, dark otherwise. Same steady illumination as ON; only
+ *     the resting state differs (ON = lit, OFF = dark).
+ *
+ * Direct writes happen only while underglow is off, when ZMK's tick is
+ * stopped and cannot fight us. set_hsb never changes the on/off state, so it
+ * cannot cause the toggle edge case.
  */
 static void
-fade_work_handler(struct k_work *work)
-{
-	bool	on = false;
-	uint8_t	b;
-
-	ARG_UNUSED(work);
-
-	zmk_rgb_underglow_get_state(&on);
-	if (on) {
-		return;		/* user turned RGB on; let ZMK own the strip */
-	}
-
-	fade_step++;
-	if (fade_step < ROTR_RGB_FADE_STEPS) {
-		b = (uint8_t)((int)fade_color.b *
-		    (ROTR_RGB_FADE_STEPS - fade_step) / ROTR_RGB_FADE_STEPS);
-		strip_fill(hsb_to_rgb(fade_color.h, fade_color.s, b));
-		k_work_schedule(&fade_work,
-		    K_MSEC(ROTR_RGB_FLASH_MS / ROTR_RGB_FADE_STEPS));
-		return;
-	}
-
-	strip_fill((struct led_rgb){ .r = 0, .g = 0, .b = 0 });
-}
-
-static void
-start_flash(struct rotr_color c)
-{
-	k_work_cancel_delayable(&fade_work);
-	fade_color = c;
-	fade_step = 0;
-	strip_fill(hsb_to_rgb(c.h, c.s, c.b));
-	k_work_schedule(&fade_work,
-	    K_MSEC(ROTR_RGB_FLASH_MS / ROTR_RGB_FADE_STEPS));
-}
-
-static void
-apply_color(bool flash_if_off)
+apply_color(void)
 {
 	struct rotr_color	c = layer_colors[current_layer()];
 	bool			on = false;
 
 	zmk_rgb_underglow_get_state(&on);
 
-	/*
-	 * Keep ZMK's stored colour current in all cases. When on, this is the
-	 * live colour its tick renders; when off, it is what a later toggle-on
-	 * will show. set_hsb does not change the on/off state, so it cannot
-	 * cause the toggle edge case.
-	 */
 	zmk_rgb_underglow_set_hsb((struct zmk_led_hsb){ .h = c.h,
 	    .s = c.s, .b = c.b });
 
-	if (!on && flash_if_off) {
-		start_flash(c);
+	if (on) {
+		return;		/* ZMK's tick renders the lit colour */
+	}
+
+	if (selector_held()) {
+		strip_fill(hsb_to_rgb(c.h, c.s, c.b));
+	} else {
+		strip_fill((struct led_rgb){ .r = 0, .g = 0, .b = 0 });
 	}
 }
 
@@ -220,7 +195,7 @@ static void
 apply_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
-	apply_color(true);
+	apply_color();
 }
 
 static void
@@ -241,8 +216,8 @@ boot_work_handler(struct k_work *work)
 		}
 	}
 
-	/* Settle the boot colour (no flash at boot). */
-	apply_color(false);
+	/* Settle the boot colour. */
+	apply_color();
 }
 
 static int
@@ -260,7 +235,6 @@ static int
 rgb_indicator_init(void)
 {
 	k_work_init(&apply_work, apply_work_handler);
-	k_work_init_delayable(&fade_work, fade_work_handler);
 	k_work_init_delayable(&boot_work, boot_work_handler);
 
 	/* Run once underglow, ext-power and settings are all ready. */
