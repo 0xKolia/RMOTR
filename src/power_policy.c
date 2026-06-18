@@ -212,4 +212,4 @@ static int power_policy_init(void)
 	return 0;
 }
 
-SYS_INIT(power_policy_init, APPLICATION, 100);
+SYS_INIT(power_policy_init, APPLICATION, 99);
