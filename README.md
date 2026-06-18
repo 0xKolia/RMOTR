@@ -1,62 +1,154 @@
-# ROTR — Path C
+# RMOTR
 
-Aftermarket ZMK firmware for the Polarity Works **ROTR** macropad.
+Custom ZMK firmware for the Polarity Works ROTR macropad.
 
-This is the **"Path C"** fork: one MA730 magnetic encoder driving several
-layer-aware "worlds" (key taps, smooth scroll, a hold-to-select layer
-selector) with a per-layer RGB underglow indicator. It is built on top of
-[**MOTR**](https://github.com/martial-cc/MOTR) by Carl Henriksson (MIT) — MOTR's
-MA730 driver, board definition, DTS bindings and the pinned upstream ZMK are
-reused; the layer-selector architecture, per-layer RGB toggle model and
-ext-power handling are added here.
+This project combines the upstream [ZMK](https://github.com/zmkfirmware/zmk)
+keyboard firmware ecosystem with the excellent
+[MOTR](https://github.com/martial-cc/MOTR) ROTR work by Carl Henriksson. MOTR
+provides the working ROTR board support, MA730 magnetic encoder driver,
+devicetree bindings, and the pinned upstream ZMK base. RMOTR builds on that
+foundation with a layer-aware knob, stock-style ROTR RGB behavior, ghost-input
+filtering, and connection-aware power management.
 
-This is an independent project and is not affiliated with Polarity Works.
+This is an independent community firmware. It is not affiliated with Polarity
+Works.
 
-## Features
+## What Is New
 
-- One knob, many modes — its behaviour follows the active layer:
-  - **brightness** (F13/F14), **arrows** (Right/Left), **horizontal scroll**,
-    **vertical scroll**, plus reserved layers (layer 5 pre-loaded as Volume).
-- **Hold-MIDDLE layer selector:** hold the middle button and turn to pick a
-  layer; release to land on it. A quick tap is Select-All.
-- Buttons are Copy / Select-All / Paste on every active layer.
-- **Per-layer RGB underglow** with a clean on/off toggle (hold MIDDLE + tap
-  RIGHT): ON = the layer colour stays lit continuously; OFF = dark, lighting
-  the candidate colour only while the selector is held.
-- USB + Bluetooth, battery reporting.
+- One physical MA730 knob controls different actions depending on the active
+  layer.
+- Hold-middle layer selector: hold the middle button, turn the knob to choose a
+  layer, release to land on it.
+- Per-layer RGB underglow that behaves like the original ROTR:
+  - RGB on: the active layer color stays lit continuously.
+  - RGB off: the LED stays dark, except while holding middle to select a layer.
+- Stationary knob jitter filtering to prevent occasional ghost inputs.
+- USB-over-Bluetooth priority:
+  - USB HID is preferred whenever plugged into a host.
+  - BLE is used when USB HID is unavailable.
+- Power management:
+  - USB idle power-off after 15 minutes.
+  - BLE or disconnected idle power-off after 5 minutes.
+  - Immediate power-off when USB/BLE disconnects and no usable host remains.
+  - Button press can wake the device from power-off.
 
-See [`DESIGN.md`](DESIGN.md) for the full architecture and
-[`CLAUDE.md`](CLAUDE.md) for a quick project map.
+## Current Controls
+
+The ROTR has three buttons and one knob.
+
+| Control | Normal behavior |
+|---------|-----------------|
+| Left button | Copy, `Ctrl+C` |
+| Middle button tap | Select all, `Ctrl+A` |
+| Middle button hold | Enter layer selection mode |
+| Right button | Paste, `Ctrl+V` |
+| Hold middle + tap right | Toggle RGB underglow |
+| Hold middle + tap left | Clear Bluetooth bonds |
+| Hold middle + turn knob | Select active layer |
+
+## Current Layers
+
+| Layer | Name | Knob behavior | RGB color |
+|------:|------|---------------|-----------|
+| 0 | Default | No knob output | White |
+| 1 | Brightness | Clockwise `F13`, counter-clockwise `F14` | Amber/yellow |
+| 2 | Arrows | Clockwise Right, counter-clockwise Left | Green |
+| 3 | Horizontal scroll | Smooth horizontal scroll | Cyan |
+| 4 | Vertical scroll | Smooth vertical scroll | Magenta |
+| 5 | Reserved | Pre-loaded as volume up/down, disabled by default | Orange |
+| 6 | Reserved | No knob output | Blue |
+| 7 | Reserved | No knob output | Teal |
+| 8 | Reserved | No knob output | Purple |
+| 9 | Selector | Temporary held layer used for layer selection | Not shown |
+
+Layers 5-8 are intentionally reserved. Layer 5 already has volume keycodes in
+the devicetree, but it is excluded from the selector until
+`select-layer-count` is raised.
+
+## RGB Behavior
+
+RGB is toggled with hold middle + tap right.
+
+When RGB is on, the LED shows the active layer color continuously, including
+while idle and after a layer is selected.
+
+When RGB is off, the LED is dark at rest. While middle is held for layer
+selection, the LED lights in the candidate layer color and updates as the knob
+turns. Releasing middle lands the layer and turns the LED dark again.
+
+## Power Behavior
+
+USB is preferred over Bluetooth. If the ROTR is connected over Bluetooth and is
+then plugged into a USB host, USB HID becomes the active output.
+
+Current timeout behavior:
+
+| State | Behavior |
+|-------|----------|
+| USB HID connected | Power off after 15 minutes of inactivity |
+| BLE connected | Power off after 5 minutes of inactivity |
+| Not connected | Power off after 5 minutes of inactivity |
+| USB power lost with no BLE connection | Power off immediately |
+| BLE disconnects with no USB HID connection | Power off immediately |
+
+A button press can wake the device from power-off. Knob movement alone cannot
+wake it, because the MA730 encoder is read by SPI polling and is not a GPIO wake
+source.
 
 ## Hardware
 
-- Polarity Works — ROTR (nRF52840, MA730 encoder, WS2812 underglow).
+Target hardware:
 
-## Download
-
-The latest firmware is attached to the
-[releases](https://github.com/0xKolia/RMOTR/releases) page as `ROTR.uf2`.
+- Polarity Works ROTR
+- Nordic nRF52840
+- MA730 magnetic rotary encoder
+- Three-button matrix
+- WS2812 underglow strip
+- USB and Bluetooth
+- Battery reporting
 
 ## Building
 
-No local toolchain needed — firmware is built by GitHub Actions:
+Firmware is built with GitHub Actions. No local ZMK toolchain is required.
 
 1. Fork this repository.
-2. Edit the board files (e.g.
-   `boards/polarityworks/rotr/rotr.keymap` or the `ma730` node in
-   `rotr_nrf52840_zmk.dts`) to change behaviour.
-3. Open the **Actions** tab → **Run workflow** (or push a commit).
-4. When the run completes, download the `ROTR.uf2` artifact from it.
+2. Edit the board files if needed:
+   - Keymap: `boards/polarityworks/rotr/rotr.keymap`
+   - Knob layers/tunables: `boards/polarityworks/rotr/rotr_nrf52840_zmk.dts`
+   - Firmware config: `boards/polarityworks/rotr/rotr_nrf52840_zmk_defconfig`
+3. Push a commit or run the workflow manually from the Actions tab.
+4. Download the generated `ROTR.uf2` artifact.
 
 ## Flashing
 
-1. Double-press the reset button on the PCB to enter the bootloader.
-2. The device appears as a USB mass storage device.
+1. Double-press the reset button on the ROTR PCB to enter the UF2 bootloader.
+2. The device should mount as USB mass storage.
 3. Copy `ROTR.uf2` onto it.
-4. The device restarts automatically.
+4. The device reboots into the new firmware.
 
-## Credits & License
+## Project Map
 
-Based on [MOTR](https://github.com/martial-cc/MOTR) by **Carl Henriksson**.
+| Path | Purpose |
+|------|---------|
+| `boards/polarityworks/rotr/rotr.keymap` | Button bindings and layer definitions |
+| `boards/polarityworks/rotr/rotr_nrf52840_zmk.dts` | Hardware, MA730 modes, layer tunables |
+| `drivers/sensor/ma730/ma730_input.c` | Layer-aware MA730 knob driver |
+| `src/rgb_indicator.c` | Per-layer RGB indicator and LED power handling |
+| `src/power_policy.c` | USB/BLE priority and idle power-off policy |
+| `config/west.yml` | Pinned ZMK revision |
+| `DESIGN.md` | Detailed design notes and rationale |
+| `CLAUDE.md` | Short project map for future AI/code sessions |
 
-MIT. Copyright (c) 2026 Carl Henriksson.
+## Credits
+
+- [ZMK](https://github.com/zmkfirmware/zmk), the keyboard firmware project this
+  firmware builds on.
+- [MOTR](https://github.com/martial-cc/MOTR) by Carl Henriksson, which provides
+  the ROTR board support, MA730 driver foundation, DTS bindings, and pinned ZMK
+  setup used here.
+- Original Polarity Works ROTR behavior, especially the layer-color underglow
+  model, inspired the RGB behavior implemented in this fork.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
