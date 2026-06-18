@@ -1,2 +1,4 @@
 artifacts/
 build_artifacts/
+.claude/
+ROTR-PathC-Project-Summary.md

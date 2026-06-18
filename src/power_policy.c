@@ -39,7 +39,6 @@ static struct k_work_delayable policy_work;
 static struct k_work_delayable poweroff_work;
 static int64_t last_activity_ms;
 static bool was_usb_powered;
-static bool was_usb_hid_ready;
 static bool was_ble_connected;
 static bool powering_off;
 
@@ -156,7 +155,6 @@ static void handle_connection_change(void)
 	}
 
 	was_usb_powered = now_usb_powered;
-	was_usb_hid_ready = now_usb_hid_ready;
 	was_ble_connected = now_ble_connected;
 	schedule_policy();
 }
@@ -200,7 +198,6 @@ static int power_policy_init(void)
 {
 	last_activity_ms = k_uptime_get();
 	was_usb_powered = usb_powered();
-	was_usb_hid_ready = usb_hid_ready();
 	was_ble_connected = ble_connected();
 
 	k_work_init_delayable(&policy_work, policy_work_handler);

@@ -58,16 +58,18 @@ the candidate base layer, release lands it.
 
 ## RGB toggle model (`src/rgb_indicator.c`)
 
-A `zmk_layer_state_changed` listener shows the current layer colour, where
-"current layer" excludes the held selector (so a held selector previews the
-candidate). It's a clean toggle (HOLD MIDDLE + TAP RIGHT, persisted by ZMK):
+An always-running 50 ms render tick owns the visible strip output, backed by a
+`zmk_layer_state_changed` listener for instant response. "Current layer"
+excludes the held selector, so a held selector previews the candidate landing
+layer. The clean toggle is HOLD MIDDLE + TAP RIGHT, persisted by ZMK:
 
 - **ON:** current colour lit **continuously**, at rest and at idle
-  (`CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n`). ZMK's tick renders it.
+  (`CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE=n`). `src/rgb_indicator.c`
+  direct-renders the solid layer colour every frame.
 - **OFF:** **dark at rest.** Lights only while MIDDLE is **held** — candidate
   colour **solid** for the whole hold, dark on release. No flashing.
-- Off-state illumination is written straight to the strip
-  (`led_strip_update_rgb`) and never flips ZMK's on/off state.
+- Both visible states are written straight to the strip (`led_strip_update_rgb`);
+  ZMK's underglow state is used as the persisted user toggle.
 - The ext-power rail is **decoupled** from RGB on/off (defconfig deliberately
   sets `CONFIG_ZMK_RGB_UNDERGLOW_EXT_POWER=n`); this module brings the rail up
   once at boot and keeps it powered. This was the dead-underglow fix — see
@@ -79,6 +81,7 @@ candidate). It's a clean toggle (HOLD MIDDLE + TAP RIGHT, persisted by ZMK):
 |------|------|
 | `drivers/sensor/ma730/ma730_input.c` | encoder driver + world-selector |
 | `src/rgb_indicator.c` | per-layer RGB + ext-power management |
+| `src/power_policy.c` | USB/BLE priority + inactivity power-off policy |
 | `boards/polarityworks/rotr/rotr-ma730.h` | shared mode/layer constants (DT + C) |
 | `boards/polarityworks/rotr/rotr_nrf52840_zmk.dts` | `ma730` node: `layer-modes`, keycodes, tunables |
 | `boards/polarityworks/rotr/rotr.keymap` | keymap + `&lt_sel` hold-tap |
