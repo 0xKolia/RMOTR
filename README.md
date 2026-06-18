@@ -1,36 +1,63 @@
 # RMOTR
 
-Custom ZMK firmware for the Polarity Works ROTR macropad.
+Custom firmware for the Polarity Works ROTR macropad.
 
-This project combines the upstream [ZMK](https://github.com/zmkfirmware/zmk)
-keyboard firmware ecosystem with the excellent
-[MOTR](https://github.com/martial-cc/MOTR) ROTR work by Carl Henriksson. MOTR
-provides the working ROTR board support, MA730 magnetic encoder driver,
-devicetree bindings, and the pinned upstream ZMK base. RMOTR builds on that
-foundation with a layer-aware knob, stock-style ROTR RGB behavior, ghost-input
-filtering, and connection-aware power management.
+RMOTR turns the ROTR into a small multi-purpose desktop controller: copy,
+select-all, paste, brightness control, arrow nudging, horizontal scrolling,
+vertical scrolling, Bluetooth, USB, RGB layer feedback, and sensible sleep
+behavior, all from the same three buttons and one knob.
+
+The goal is simple: keep the original ROTR's clean, playful layer-selection
+feel, but make the knob useful for both keyboard-style actions and mouse-style
+scrolling.
+
+This project combines two worlds:
+
+- The original Polarity Works/ZMK-style ROTR behavior was mainly keyboard
+  focused: layers, key presses, and the familiar layer-color RGB feedback.
+- [MOTR](https://github.com/martial-cc/MOTR) by Carl Henriksson brought working
+  upstream ZMK support for the ROTR hardware and a proper MA730 magnetic encoder
+  path for mouse-wheel style input.
+
+RMOTR brings those ideas together. It is built on
+[ZMK](https://github.com/zmkfirmware/zmk), reuses MOTR's ROTR board support and
+MA730 foundation, then adds a layer-aware knob so the same physical control can
+act like keys on one layer, a scroll wheel on another, and a layer selector
+while the middle button is held.
 
 This is an independent community firmware. It is not affiliated with Polarity
 Works.
 
-## What Is New
+## What It Does
 
-- One physical MA730 knob controls different actions depending on the active
-  layer.
-- Hold-middle layer selector: hold the middle button, turn the knob to choose a
-  layer, release to land on it.
-- Per-layer RGB underglow that behaves like the original ROTR:
+- One knob, multiple jobs: brightness, arrow keys, horizontal scroll, vertical
+  scroll, and reserved layers for future actions.
+- Hold the middle button and turn the knob to choose a layer. Release middle to
+  stay on that layer.
+- Per-layer RGB underglow:
   - RGB on: the active layer color stays lit continuously.
   - RGB off: the LED stays dark, except while holding middle to select a layer.
-- Stationary knob jitter filtering to prevent occasional ghost inputs.
-- USB-over-Bluetooth priority:
-  - USB HID is preferred whenever plugged into a host.
-  - BLE is used when USB HID is unavailable.
-- Power management:
-  - USB idle power-off after 15 minutes.
-  - BLE or disconnected idle power-off after 5 minutes.
-  - Immediate power-off when USB/BLE disconnects and no usable host remains.
-  - Button press can wake the device from power-off.
+- Jitter filtering for the sensitive magnetic knob, reducing ghost inputs while
+  keeping the knob responsive.
+- USB takes priority over Bluetooth when plugged in.
+- Battery-friendly idle behavior, including automatic power-off.
+
+## Knob Feel
+
+The ROTR uses an MA730 magnetic encoder, which is much more sensitive than a
+traditional stepped mechanical encoder. That sensitivity is what makes smooth
+scrolling possible, but it also means tiny vibrations or sensor drift can look
+like movement if the firmware is too trusting.
+
+RMOTR filters tiny stationary changes before they become keyboard or scroll
+events. It also clears partial movement after the knob has been still for a
+short time, so an almost-turn cannot sit in memory and later become a random
+input. The result should feel responsive when you intentionally turn the knob,
+but quiet when the device is sitting untouched.
+
+Layer selection is intentionally less sensitive than scrolling. You should be
+able to hold middle and make deliberate one-layer nudges without accidentally
+skipping through the whole layer list.
 
 ## Current Controls
 
@@ -80,6 +107,10 @@ turns. Releasing middle lands the layer and turns the LED dark again.
 
 USB is preferred over Bluetooth. If the ROTR is connected over Bluetooth and is
 then plugged into a USB host, USB HID becomes the active output.
+
+The intention is for the ROTR to behave like a normal wireless/battery device:
+stay awake while useful, prefer the wired host when plugged in, and go to sleep
+when it is no longer connected or has been idle for a while.
 
 Current timeout behavior:
 
