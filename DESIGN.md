@@ -57,6 +57,24 @@ Set in `src/rgb_indicator.c` `layer_colors[]`:
 Pure red (H 0, S 100) is reserved for future alert use; blue (225) is kept
 clear of cyan (180).
 
+## Connection-aware power policy (`src/power_policy.c`)
+USB HID is the preferred output whenever it is ready; BLE is only the fallback
+when USB HID is unavailable. The preferred endpoint is forced back to USB when
+USB HID becomes ready, so a previously persisted BLE preference cannot keep
+input routed to a laptop after the ROTR is plugged into a PC.
+
+Timeouts are connection-specific:
+
+- USB HID ready: power off after `ROTR_POWER_POLICY_USB_TIMEOUT_MS` (15 min).
+- BLE connected, or disconnected from all hosts: power off after
+  `ROTR_POWER_POLICY_BLE_TIMEOUT_MS` (5 min).
+- USB power is lost and BLE is not connected: power off immediately.
+- BLE disconnects while USB HID is not ready: power off immediately.
+
+Power-off uses ZMK's device suspend path and `sys_poweroff()`. The key matrix
+has `wakeup-source;`, so a button press can wake it. The MA730 knob is
+SPI-polled, so knob rotation alone cannot wake from power-off.
+
 ## The selector (Stage 3, replaces the Stage 2 combo harness)
 - MIDDLE is a hold-tap (`&lt_sel`, `zmk,behavior-hold-tap`,
   `flavor = "hold-preferred"`, `tapping-term-ms = <200>`): **tap** = Select-All,

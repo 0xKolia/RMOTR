@@ -24,6 +24,15 @@ CONFIG_FLASH_MAP=y
 CONFIG_ZMK_USB=y
 CONFIG_ZMK_BLE=y
 
+# Connection-aware power policy:
+# - USB HID is preferred over BLE.
+# - USB HID idle powers off after 15 minutes.
+# - BLE/disconnected idle powers off after 5 minutes.
+# - USB loss with no BLE, or BLE loss with no USB HID, powers off immediately.
+CONFIG_ROTR_POWER_POLICY=y
+CONFIG_ROTR_POWER_POLICY_USB_TIMEOUT_MS=900000
+CONFIG_ROTR_POWER_POLICY_BLE_TIMEOUT_MS=300000
+
 # WS2812 underglow.
 # The LED strip is powered through the gpio1.11 ext-power rail. We keep the
 # rail enabled and managed by src/rgb_indicator.c, and deliberately do NOT

@@ -7,5 +7,31 @@ config ROTR_RGB_INDICATOR
 	default y
 	help
 	  Show the active keymap layer's colour on the underglow via a
-	  layer-state-changed listener. When the underglow is toggled off it
-	  stays off, except a brief fade-flash on each layer change.
+	  layer-state-changed listener. Toggle on keeps the layer colour lit;
+	  toggle off stays dark except while the selector is held.
+
+config ROTR_POWER_POLICY
+	bool "ROTR connection-aware power policy"
+	depends on ZMK_USB && ZMK_BLE
+	select ZMK_PM_DEVICE_SUSPEND_RESUME
+	select PM_DEVICE
+	select POWEROFF
+	default y
+	help
+	  Prefer USB HID over BLE, then power off after connection-specific
+	  inactivity timeouts or immediately after disconnect conditions.
+
+config ROTR_POWER_POLICY_USB_TIMEOUT_MS
+	int "ROTR USB inactivity timeout (milliseconds)"
+	depends on ROTR_POWER_POLICY
+	default 900000
+	help
+	  Inactivity period before power-off while USB HID is ready.
+
+config ROTR_POWER_POLICY_BLE_TIMEOUT_MS
+	int "ROTR BLE/disconnected inactivity timeout (milliseconds)"
+	depends on ROTR_POWER_POLICY
+	default 300000
+	help
+	  Inactivity period before power-off while using BLE or while not
+	  connected to any host.
